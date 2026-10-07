@@ -1,6 +1,7 @@
 package com.novaclient.module;
 
 import com.novaclient.module.impl.FpsDisplayModule;
+import com.novaclient.module.impl.MenuSettingsModule;
 import com.novaclient.module.impl.ToggleSprintModule;
 
 import java.util.ArrayList;
@@ -12,8 +13,10 @@ import java.util.Optional;
 /** Holds every module. Add new modules in the constructor. */
 public class ModuleManager {
 	private final List<Module> modules = new ArrayList<>();
+	private final MenuSettingsModule menuSettings = new MenuSettingsModule();
 
 	public ModuleManager() {
+		register(menuSettings);
 		register(new FpsDisplayModule());
 		register(new ToggleSprintModule());
 	}
@@ -22,6 +25,11 @@ public class ModuleManager {
 		modules.add(module);
 	}
 
+	public MenuSettingsModule getMenuSettings() {
+		return menuSettings;
+	}
+
+	/** Every module, including hidden ones. Used for saving. */
 	public List<Module> getAll() {
 		return Collections.unmodifiableList(modules);
 	}
@@ -38,7 +46,7 @@ public class ModuleManager {
 
 	public List<Module> getByCategory(Category category) {
 		return modules.stream()
-				.filter(module -> module.getCategory() == category)
+				.filter(module -> !module.isHidden() && module.getCategory() == category)
 				.toList();
 	}
 
@@ -49,6 +57,7 @@ public class ModuleManager {
 	public List<Module> search(String query, Category category) {
 		String needle = query.trim().toLowerCase(Locale.ROOT);
 		return modules.stream()
+				.filter(module -> !module.isHidden())
 				.filter(module -> category == null || module.getCategory() == category)
 				.filter(module -> needle.isEmpty()
 						|| module.getName().toLowerCase(Locale.ROOT).contains(needle)

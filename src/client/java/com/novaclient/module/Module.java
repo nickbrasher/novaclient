@@ -57,6 +57,16 @@ public abstract class Module {
 	protected void onDisable() {
 	}
 
+	/** Hidden modules are left out of the grid and search (e.g. Menu Settings). */
+	public boolean isHidden() {
+		return false;
+	}
+
+	/** Whether the menu shows an on/off switch for this module. */
+	public boolean isToggleable() {
+		return true;
+	}
+
 	public String getName() {
 		return name;
 	}

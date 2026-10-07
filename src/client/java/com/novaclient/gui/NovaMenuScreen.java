@@ -1,6 +1,9 @@
 package com.novaclient.gui;
 
 import com.novaclient.NovaClient;
+import com.novaclient.gui.anim.Animated;
+import com.novaclient.gui.anim.SmoothScroller;
+import com.novaclient.gui.anim.Tween;
 import com.novaclient.module.Category;
 import com.novaclient.module.Module;
 import com.novaclient.module.ModuleManager;
@@ -9,39 +12,70 @@ import com.novaclient.module.setting.ColorSetting;
 import com.novaclient.module.setting.NumberSetting;
 import com.novaclient.module.setting.Setting;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Util;
+import org.joml.Matrix3x2fStack;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 import java.util.function.DoubleConsumer;
 
 /**
  * The main Nova Client menu: category sidebar, search bar, module card grid,
- * and a settings panel that replaces the grid when a card is clicked.
+ * and a settings page that slides in when a card is clicked.
  *
- * Every frame, the draw code also records "hitboxes" (clickable rectangles).
+ * How the animation works: every frame we measure how much time passed (deltaSeconds)
+ * and nudge each animation forward by that much. Drawing then reads the current
+ * animation values, so motion is smooth at any frame rate.
+ *
+ * How clicks work: while drawing, we record "hitboxes" (clickable rectangles).
  * mouseClicked() checks those instead of re-calculating the layout.
  */
 public class NovaMenuScreen extends Screen {
-	private static final int SIDEBAR_WIDTH = 100;
-	private static final int PADDING = 10;
-	private static final int HEADER_HEIGHT = 18;
-	private static final int TAB_HEIGHT = 18;
-	private static final int CARD_MIN_WIDTH = 110;
-	private static final int CARD_HEIGHT = 48;
-	private static final int CARD_GAP = 8;
-	private static final int ROW_GAP = 6;
-	private static final int SCROLL_SPEED = 12;
+	// Layout, in GUI pixels.
+	private static final int MAX_PANEL_WIDTH = 500;
+	private static final int MAX_PANEL_HEIGHT = 310;
+	private static final int SIDEBAR_WIDTH = 112;
+	private static final int PADDING = 12;
+	private static final int GAP = 8;
+	private static final int PANEL_RADIUS = 10;
+	private static final int CARD_RADIUS = 7;
+	private static final int CONTROL_RADIUS = 6;
+	private static final int HEADER_HEIGHT = 22;
+	private static final int TAB_HEIGHT = 22;
+	private static final int TAB_GAP = 4;
+	private static final int TABS_TOP = 44;
+	private static final int CARD_MIN_WIDTH = 124;
+	private static final int CARD_HEIGHT = 56;
+	private static final int TEXT_HEIGHT = 8;
+	private static final int LIST_INSET = 4; // room for hover lift and shadows inside scroll areas
 
-	// The four color channels, as {bit shift, slider color}, in display order R, G, B, A.
+	// Animation timing.
+	private static final float OPEN_SECONDS = 0.2f;
+	private static final float PAGE_SECONDS = 0.25f;
+	private static final float GRID_FADE_SECONDS = 0.18f;
+	private static final float HOVER_SPEED = 14f;
+	private static final float TOGGLE_SPEED = 14f;
+	private static final float INDICATOR_SPEED = 18f;
+	private static final float SCROLLBAR_SPEED = 8f;
+
+	// The four color channels in display order R, G, B, A.
 	private static final String[] CHANNEL_LABELS = {"R", "G", "B", "A"};
 	private static final int[] CHANNEL_SHIFTS = {16, 8, 0, 24};
-	private static final int[] CHANNEL_COLORS = {0xFFFF5555, 0xFF55DD55, 0xFF5599FF, 0xFFCCCCCC};
+	private static final int[] CHANNEL_COLORS = {0xFFFF5C5C, 0xFF5CD65C, 0xFF5C9DFF, 0xFFCCCCCC};
+
+	// Keys for animations that don't belong to a module or setting.
+	private static final Object ALL_TAB = new Object();
+	private static final Object SETTINGS_TAB = new Object();
+	private static final Object BACK_BUTTON = new Object();
 
 	// static = shared across every NovaMenuScreen, so the menu reopens where you left it.
 	private static Category selectedCategory = null; // null means "All"
@@ -49,12 +83,27 @@ public class NovaMenuScreen extends Screen {
 
 	private final ModuleManager modules = NovaClient.getModules();
 	private final List<Hitbox> hitboxes = new ArrayList<>();
+	private final Map<Object, Animated> hoverAnims = new HashMap<>();
+	private final Map<Object, Animated> toggleAnims = new HashMap<>();
 
-	private Module openModule; // non-null while the settings panel is showing
-	private EditBox searchBox;
+	private final Tween openTween = new Tween(OPEN_SECONDS, 0f, true);
+	private final Tween pageTween = new Tween(PAGE_SECONDS, 0f, false); // 0 = grid, 1 = settings page
+	private final Tween gridFade = new Tween(GRID_FADE_SECONDS, 1f, true);
+	private final Animated tabIndicator = new Animated(0, INDICATOR_SPEED);
+	private final SmoothScroller gridScroll = new SmoothScroller();
+	private final SmoothScroller settingsScroll = new SmoothScroller();
+	private final SearchField search = new SearchField(searchQuery, text -> {
+		searchQuery = text;
+		gridScroll.reset();
+	});
+
+	private Module pageModule; // the module on the settings page (kept while it slides out)
 	private SliderDrag activeDrag;
-	private double scroll;
-	private int maxScroll;
+	private boolean closing;
+	private boolean closeScheduled;
+	private boolean indicatorPlaced;
+	private long lastFrameNanos;
+	private float deltaSeconds;
 
 	// Layout, recalculated in init() whenever the window is resized.
 	private int panelX;
@@ -62,7 +111,16 @@ public class NovaMenuScreen extends Screen {
 	private int panelW;
 	private int panelH;
 	private int contentX;
+	private int contentY;
 	private int contentW;
+
+	// Per-frame state used while drawing.
+	private float panelScale = 1f;
+	private float panelMouseX;
+	private float panelMouseY;
+	private float hitOffsetX;
+	private float hitOffsetY;
+	private boolean interactive;
 
 	public NovaMenuScreen() {
 		super(Component.literal("Nova Client"));
@@ -70,305 +128,429 @@ public class NovaMenuScreen extends Screen {
 
 	@Override
 	protected void init() {
-		panelW = Math.min(this.width - 40, 480);
-		panelH = Math.min(this.height - 40, 300);
+		panelW = Math.min(this.width - 32, MAX_PANEL_WIDTH);
+		panelH = Math.min(this.height - 32, MAX_PANEL_HEIGHT);
 		panelX = (this.width - panelW) / 2;
 		panelY = (this.height - panelH) / 2;
 		contentX = panelX + SIDEBAR_WIDTH + PADDING;
+		contentY = panelY + PADDING;
 		contentW = panelW - SIDEBAR_WIDTH - PADDING * 2;
-
-		// EditBox is Minecraft's built-in text field. We hide its border and draw our own background.
-		searchBox = new EditBox(this.font, contentX + 8, panelY + PADDING + 5, contentW - 16, this.font.lineHeight,
-				Component.literal("Search"));
-		searchBox.setBordered(false);
-		searchBox.setMaxLength(50);
-		searchBox.setTextColor(Theme.TEXT);
-		searchBox.setHint(Component.literal("Search modules...").withColor(Theme.TEXT_DIM));
-		searchBox.setValue(searchQuery);
-		searchBox.setResponder(text -> {
-			searchQuery = text;
-			scroll = 0;
-		});
-		searchBox.visible = openModule == null;
-		addRenderableWidget(searchBox);
 	}
 
+	// ---------------------------------------------------------------- frame
+
+	/** Background runs first each frame, so this is where the clock and timed animations advance. */
 	@Override
 	public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-		graphics.fill(0, 0, this.width, this.height, Theme.OVERLAY);
+		long now = Util.getNanos();
+		deltaSeconds = lastFrameNanos == 0 ? 0 : Math.min((now - lastFrameNanos) / 1_000_000_000f, 0.1f);
+		lastFrameNanos = now;
+		openTween.update(deltaSeconds);
+		pageTween.update(deltaSeconds);
+		gridFade.update(deltaSeconds);
+
+		if (closing && openTween.isFinished() && !closeScheduled) {
+			// Close on the next game loop iteration, not in the middle of drawing.
+			closeScheduled = true;
+			this.minecraft.schedule(this::finishClose);
+		}
+
+		// On the title screen there's no world behind us, so show the menu panorama instead.
+		if (this.minecraft.level == null) {
+			extractPanorama(graphics, partialTick);
+		}
+		// Uses the player's Menu Background Blur setting (Options > Accessibility).
+		extractBlurredBackground(graphics);
+		graphics.fill(0, 0, this.width, this.height, Theme.withAlpha(Theme.TINT, openTween.eased()));
 	}
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		hitboxes.clear();
-		RenderUtil.roundedRect(graphics, panelX, panelY, panelW, panelH, 6, Theme.PANEL);
-		drawSidebar(graphics, mouseX, mouseY);
-		if (openModule == null) {
-			drawModuleGrid(graphics, mouseX, mouseY);
-		} else {
-			drawSettingsPanel(graphics, mouseX, mouseY);
+		float open = openTween.eased();
+		panelScale = 0.9f + 0.1f * open;
+		panelMouseX = toPanelX(mouseX);
+		panelMouseY = toPanelY(mouseY);
+		interactive = !closing;
+		hitOffsetX = 0;
+		hitOffsetY = 0;
+
+		// Scale the whole panel around its center for the open/close animation.
+		Matrix3x2fStack pose = graphics.pose();
+		pose.pushMatrix();
+		if (panelScale != 1f) {
+			float centerX = panelX + panelW / 2f;
+			float centerY = panelY + panelH / 2f;
+			pose.translate(centerX, centerY);
+			pose.scale(panelScale, panelScale);
+			pose.translate(-centerX, -centerY);
 		}
-		// Draws the widgets (just the search box) on top of our panel.
-		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+		RenderUtil.setAlpha(open);
+
+		drawPanel(graphics);
+		drawSidebar(graphics);
+		drawContent(graphics);
+
+		RenderUtil.setAlpha(1f);
+		pose.popMatrix();
+	}
+
+	private void drawPanel(GuiGraphicsExtractor graphics) {
+		for (int i = 1; i <= 8; i++) {
+			float spread = i * 1.5f;
+			RenderUtil.roundedRect(graphics, panelX - spread, panelY - spread + 4, panelW + spread * 2, panelH + spread * 2,
+					PANEL_RADIUS + spread, Theme.withAlpha(Theme.SHADOW, 0.05f));
+		}
+		RenderUtil.roundedRect(graphics, panelX - 1, panelY - 1, panelW + 2, panelH + 2, PANEL_RADIUS + 1, Theme.BORDER);
+		RenderUtil.roundedRect(graphics, panelX + SIDEBAR_WIDTH, panelY, panelW - SIDEBAR_WIDTH, panelH, PANEL_RADIUS,
+				Theme.PANEL, RenderUtil.TOP_RIGHT | RenderUtil.BOTTOM_RIGHT);
 	}
 
 	// ---------------------------------------------------------------- sidebar
 
-	private void drawSidebar(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-		RenderUtil.roundedRect(graphics, panelX, panelY, SIDEBAR_WIDTH, panelH, 6, Theme.SIDEBAR);
-		// Square off the sidebar's right edge where it meets the content area.
-		graphics.fill(panelX + SIDEBAR_WIDTH - 6, panelY, panelX + SIDEBAR_WIDTH, panelY + panelH, Theme.SIDEBAR);
+	private void drawSidebar(GuiGraphicsExtractor graphics) {
+		RenderUtil.roundedRect(graphics, panelX, panelY, SIDEBAR_WIDTH, panelH, PANEL_RADIUS, Theme.SIDEBAR,
+				RenderUtil.TOP_LEFT | RenderUtil.BOTTOM_LEFT);
+		RenderUtil.roundedRect(graphics, panelX + SIDEBAR_WIDTH, panelY, 1, panelH, 0, Theme.DIVIDER);
 
-		int titleWidth = this.font.width("Nova Client");
-		int titleX = panelX + (SIDEBAR_WIDTH - titleWidth) / 2;
-		graphics.text(this.font, "Nova", titleX, panelY + 14, Theme.ACCENT, false);
-		graphics.text(this.font, " Client", titleX + this.font.width("Nova"), panelY + 14, Theme.TEXT, false);
+		int titleX = panelX + (SIDEBAR_WIDTH - this.font.width("Nova Client")) / 2;
+		RenderUtil.text(graphics, this.font, "Nova", titleX, panelY + PADDING + 6, Theme.accent());
+		RenderUtil.text(graphics, this.font, " Client", titleX + this.font.width("Nova"), panelY + PADDING + 6, Theme.TEXT);
 
-		int tabY = panelY + 40;
-		drawTab(graphics, null, "All", tabY, mouseX, mouseY);
-		for (Category category : Category.values()) {
-			tabY += TAB_HEIGHT + 4;
-			drawTab(graphics, category, category.getDisplayName(), tabY, mouseX, mouseY);
+		// The highlight pill glides to whichever tab is selected.
+		Object selectedKey = selectedTabKey();
+		float targetY = tabY(selectedKey);
+		if (!indicatorPlaced) {
+			tabIndicator.snap(targetY);
+			indicatorPlaced = true;
 		}
+		float indicatorY = tabIndicator.update(targetY, deltaSeconds);
+		float tabX = panelX + 8;
+		float tabW = SIDEBAR_WIDTH - 16;
+		RenderUtil.roundedRect(graphics, tabX, indicatorY, tabW, TAB_HEIGHT, CONTROL_RADIUS, Theme.TAB_SELECTED);
+		RenderUtil.roundedRect(graphics, tabX + 5, indicatorY + 6, 3, TAB_HEIGHT - 12, 1.5f, Theme.accent());
+
+		drawTab(graphics, ALL_TAB, "All", selectedKey, () -> selectCategory(null));
+		for (Category category : Category.values()) {
+			drawTab(graphics, category, category.getDisplayName(), selectedKey, () -> selectCategory(category));
+		}
+		drawTab(graphics, SETTINGS_TAB, "Settings", selectedKey, () -> openPage(modules.getMenuSettings()));
 	}
 
-	private void drawTab(GuiGraphicsExtractor graphics, Category category, String label, int y, int mouseX, int mouseY) {
-		int x = panelX + 8;
-		int w = SIDEBAR_WIDTH - 16;
-		boolean selected = category == selectedCategory && openModule == null;
-		boolean hovered = isInside(mouseX, mouseY, x, y, w, TAB_HEIGHT);
+	private void drawTab(GuiGraphicsExtractor graphics, Object key, String label, Object selectedKey, Runnable onClick) {
+		float x = panelX + 8;
+		float y = tabY(key);
+		float w = SIDEBAR_WIDTH - 16;
+		boolean selected = key == selectedKey;
+		float hover = animate(hoverAnims, key, hovered(x, y, w, TAB_HEIGHT) && !selected ? 1 : 0, HOVER_SPEED);
 
-		if (selected || hovered) {
-			RenderUtil.roundedRect(graphics, x, y, w, TAB_HEIGHT, 4, selected ? Theme.CARD_HOVER : Theme.CARD);
-		}
-		if (selected) {
-			graphics.fill(x, y + 4, x + 2, y + TAB_HEIGHT - 4, Theme.ACCENT);
-		}
-		graphics.text(this.font, label, x + 10, y + 5, selected ? Theme.TEXT : Theme.TEXT_DIM, false);
+		RenderUtil.roundedRect(graphics, x, y, w, TAB_HEIGHT, CONTROL_RADIUS, Theme.withAlpha(Theme.TAB_SELECTED, hover * 0.6f));
+		int color = selected ? Theme.TEXT : Theme.lerp(Theme.TEXT_DIM, Theme.TEXT, hover);
+		RenderUtil.text(graphics, this.font, label, x + 15 + hover * 2, y + (TAB_HEIGHT - TEXT_HEIGHT) / 2f, color);
+		addHitbox(x, y, w, TAB_HEIGHT, onClick);
+	}
 
-		addHitbox(x, y, w, TAB_HEIGHT, () -> {
-			selectedCategory = category;
-			closeSettings();
-		});
+	private Object selectedTabKey() {
+		if (pageTween.isForward() && pageModule == modules.getMenuSettings()) {
+			return SETTINGS_TAB;
+		}
+		return selectedCategory == null ? ALL_TAB : selectedCategory;
+	}
+
+	private float tabY(Object key) {
+		if (key == SETTINGS_TAB) {
+			return panelY + panelH - PADDING - TAB_HEIGHT;
+		}
+		int index = key == ALL_TAB ? 0 : ((Category) key).ordinal() + 1;
+		return panelY + TABS_TOP + index * (TAB_HEIGHT + TAB_GAP);
+	}
+
+	// ---------------------------------------------------------------- content pages
+
+	private void drawContent(GuiGraphicsExtractor graphics) {
+		float page = pageTween.eased();
+		graphics.enableScissor(panelX + SIDEBAR_WIDTH + 1, panelY, panelX + panelW, panelY + panelH);
+		if (page < 0.99f) {
+			// The grid drifts left and fades out quickly so it doesn't clutter the incoming page.
+			drawPage(graphics, -page * 40, Math.max(0, 1 - page * 1.8f), !pageTween.isForward(), this::drawGridPage);
+		}
+		if (page > 0.01f && pageModule != null) {
+			// The settings page slides in from the right edge of the panel.
+			drawPage(graphics, (1 - page) * (contentW + PADDING), page, pageTween.isForward(), this::drawSettingsPage);
+		}
+		graphics.disableScissor();
+	}
+
+	private void drawPage(GuiGraphicsExtractor graphics, float offsetX, float alpha, boolean active,
+			Consumer<GuiGraphicsExtractor> drawer) {
+		float baseAlpha = RenderUtil.getAlpha();
+		RenderUtil.setAlpha(baseAlpha * alpha);
+		Matrix3x2fStack pose = graphics.pose();
+		pose.pushMatrix();
+		pose.translate(offsetX, 0);
+		hitOffsetX = offsetX;
+		interactive = active && !closing;
+
+		drawer.accept(graphics);
+
+		interactive = !closing;
+		hitOffsetX = 0;
+		pose.popMatrix();
+		RenderUtil.setAlpha(baseAlpha);
 	}
 
 	// ---------------------------------------------------------------- module grid
 
-	private void drawModuleGrid(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-		int searchY = panelY + PADDING;
-		RenderUtil.roundedRect(graphics, contentX, searchY, contentW, HEADER_HEIGHT, 4,
-				searchBox.isFocused() ? Theme.CARD_HOVER : Theme.CARD);
+	private void drawGridPage(GuiGraphicsExtractor graphics) {
+		boolean searchHovered = hovered(contentX, contentY, contentW, HEADER_HEIGHT);
+		search.draw(graphics, this.font, contentX, contentY, contentW, HEADER_HEIGHT, searchHovered, deltaSeconds);
+		addHitbox(contentX, contentY, contentW, HEADER_HEIGHT, () -> search.setFocused(true));
 
-		int top = searchY + HEADER_HEIGHT + PADDING;
+		int top = contentY + HEADER_HEIGHT + GAP;
 		int bottom = panelY + panelH - PADDING;
+
+		// Switching categories fades the grid in with a slight upward drift.
+		float fade = gridFade.eased();
+		float rise = (1 - fade) * 8;
+		float baseAlpha = RenderUtil.getAlpha();
+		RenderUtil.setAlpha(baseAlpha * fade);
+
 		List<Module> results = modules.search(searchQuery, selectedCategory);
 		if (results.isEmpty()) {
-			maxScroll = 0;
-			graphics.centeredText(this.font, "No modules found", contentX + contentW / 2, top + 20, Theme.TEXT_DIM);
+			gridScroll.update(deltaSeconds, 0);
+			String message = "No modules found";
+			RenderUtil.text(graphics, this.font, message, contentX + (contentW - this.font.width(message)) / 2f,
+					top + 24 + rise, Theme.TEXT_DIM);
+			RenderUtil.setAlpha(baseAlpha);
 			return;
 		}
 
-		int columns = Math.max(1, (contentW + CARD_GAP) / (CARD_MIN_WIDTH + CARD_GAP));
-		int cardW = (contentW - CARD_GAP * (columns - 1)) / columns;
+		int columns = Math.max(1, (contentW + GAP) / (CARD_MIN_WIDTH + GAP));
+		float cardW = (contentW - GAP * (columns - 1f)) / columns;
 		int rows = (results.size() + columns - 1) / columns;
-		updateScrollLimit(rows * (CARD_HEIGHT + CARD_GAP) - CARD_GAP, bottom - top);
+		float listHeight = LIST_INSET * 2 + rows * (CARD_HEIGHT + GAP) - GAP;
+		gridScroll.update(deltaSeconds, listHeight - (bottom - top));
 
 		// Scissor = only draw inside this rectangle, so scrolled cards get clipped at the edges.
-		graphics.enableScissor(contentX, top, contentX + contentW, bottom);
+		graphics.enableScissor(contentX - 6, top, contentX + contentW + 6, bottom);
 		for (int i = 0; i < results.size(); i++) {
-			int x = contentX + (i % columns) * (cardW + CARD_GAP);
-			int y = top + (i / columns) * (CARD_HEIGHT + CARD_GAP) - (int) scroll;
-			drawCard(graphics, results.get(i), x, y, cardW, mouseX, mouseY, top, bottom);
+			float x = contentX + (i % columns) * (cardW + GAP);
+			float y = top + LIST_INSET + (i / columns) * (CARD_HEIGHT + GAP) - gridScroll.get() + rise;
+			if (y + CARD_HEIGHT > top - 8 && y < bottom + 8) {
+				drawCard(graphics, results.get(i), x, y, cardW, top, bottom);
+			}
 		}
 		graphics.disableScissor();
+		drawScrollbar(graphics, gridScroll, top, bottom - top, listHeight);
+		RenderUtil.setAlpha(baseAlpha);
 	}
 
-	private void drawCard(GuiGraphicsExtractor graphics, Module module, int x, int y, int w,
-			int mouseX, int mouseY, int clipTop, int clipBottom) {
-		boolean hovered = mouseY >= clipTop && mouseY < clipBottom && isInside(mouseX, mouseY, x, y, w, CARD_HEIGHT);
-		RenderUtil.roundedRect(graphics, x, y, w, CARD_HEIGHT, 5, hovered ? Theme.CARD_HOVER : Theme.CARD);
+	private void drawCard(GuiGraphicsExtractor graphics, Module module, float x, float y, float w, int clipTop, int clipBottom) {
+		boolean hovered = hovered(x, y, w, CARD_HEIGHT) && insideClip(clipTop, clipBottom);
+		float hover = animate(hoverAnims, module, hovered ? 1 : 0, HOVER_SPEED);
+		float on = animate(toggleAnims, module, module.isEnabled() ? 1 : 0, TOGGLE_SPEED);
 
-		graphics.text(this.font, ellipsize(module.getName(), w - 16), x + 8, y + 8, Theme.TEXT, false);
-		graphics.text(this.font, ellipsize(module.getDescription(), w - 16), x + 8, y + 20, Theme.TEXT_DIM, false);
+		// Hovered cards lift 2px, cast a stronger shadow, and brighten.
+		float cardY = y - hover * 2;
+		RenderUtil.shadow(graphics, x, cardY, w, CARD_HEIGHT, CARD_RADIUS, 0.35f + hover * 0.65f);
+		RenderUtil.roundedRect(graphics, x - 1, cardY - 1, w + 2, CARD_HEIGHT + 2, CARD_RADIUS + 1,
+				Theme.withAlpha(Theme.accent(), on * 0.35f));
+		RenderUtil.roundedRect(graphics, x, cardY, w, CARD_HEIGHT, CARD_RADIUS, Theme.lerp(Theme.CARD, Theme.CARD_HOVER, hover));
 
-		int toggleX = x + w - 8 - RenderUtil.TOGGLE_WIDTH;
-		int toggleY = y + CARD_HEIGHT - 8 - RenderUtil.TOGGLE_HEIGHT;
-		graphics.text(this.font, module.getCategory().getDisplayName(), x + 8, toggleY + 1, Theme.ACCENT, false);
-		RenderUtil.toggleSwitch(graphics, toggleX, toggleY, module.isEnabled());
+		int textWidth = (int) w - 20;
+		RenderUtil.text(graphics, this.font, RenderUtil.ellipsize(this.font, module.getName(), textWidth),
+				x + 10, cardY + 10, Theme.TEXT);
+		RenderUtil.text(graphics, this.font, RenderUtil.ellipsize(this.font, module.getDescription(), textWidth),
+				x + 10, cardY + 22, Theme.TEXT_DIM);
+
+		float toggleX = x + w - 10 - RenderUtil.TOGGLE_WIDTH;
+		float toggleY = cardY + CARD_HEIGHT - 10 - RenderUtil.TOGGLE_HEIGHT;
+		RenderUtil.text(graphics, this.font, module.getCategory().getDisplayName(), x + 10, toggleY + 2,
+				Theme.withAlpha(Theme.accent(), 0.85f));
+		RenderUtil.toggleSwitch(graphics, toggleX, toggleY, on);
 
 		// The toggle is added after the card, so it wins when both contain the click.
-		addClippedHitbox(x, y, w, CARD_HEIGHT, clipTop, clipBottom, () -> openSettings(module));
-		addClippedHitbox(toggleX - 2, toggleY - 2, RenderUtil.TOGGLE_WIDTH + 4, RenderUtil.TOGGLE_HEIGHT + 4,
+		addClippedHitbox(x, y, w, CARD_HEIGHT, clipTop, clipBottom, () -> openPage(module));
+		addClippedHitbox(toggleX - 3, toggleY - 3, RenderUtil.TOGGLE_WIDTH + 6, RenderUtil.TOGGLE_HEIGHT + 6,
 				clipTop, clipBottom, module::toggle);
 	}
 
-	// ---------------------------------------------------------------- settings panel
+	// ---------------------------------------------------------------- settings page
 
-	private void drawSettingsPanel(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-		Module module = openModule;
-		int headerY = panelY + PADDING;
+	private void drawSettingsPage(GuiGraphicsExtractor graphics) {
+		Module module = pageModule;
 
 		String back = "< Back";
-		int backW = this.font.width(back) + 12;
-		boolean backHovered = isInside(mouseX, mouseY, contentX, headerY, backW, HEADER_HEIGHT);
-		RenderUtil.roundedRect(graphics, contentX, headerY, backW, HEADER_HEIGHT, 4, backHovered ? Theme.CARD_HOVER : Theme.CARD);
-		graphics.text(this.font, back, contentX + 6, headerY + 5, Theme.TEXT, false);
-		addHitbox(contentX, headerY, backW, HEADER_HEIGHT, this::closeSettings);
+		float backW = this.font.width(back) + 20;
+		float backHover = animate(hoverAnims, BACK_BUTTON, hovered(contentX, contentY, backW, HEADER_HEIGHT) ? 1 : 0, HOVER_SPEED);
+		RenderUtil.roundedRect(graphics, contentX, contentY, backW, HEADER_HEIGHT, CONTROL_RADIUS,
+				Theme.lerp(Theme.CARD, Theme.CARD_HOVER, backHover));
+		RenderUtil.text(graphics, this.font, back, contentX + 10, contentY + (HEADER_HEIGHT - TEXT_HEIGHT) / 2f,
+				Theme.lerp(Theme.TEXT_DIM, Theme.TEXT, backHover));
+		addHitbox(contentX, contentY, backW, HEADER_HEIGHT, this::closePage);
 
-		graphics.text(this.font, module.getName(), contentX + backW + 10, headerY + 5, Theme.TEXT, false);
+		RenderUtil.text(graphics, this.font, module.getName(), contentX + backW + 10,
+				contentY + (HEADER_HEIGHT - TEXT_HEIGHT) / 2f, Theme.TEXT);
+		if (module.isToggleable()) {
+			float on = animate(toggleAnims, module, module.isEnabled() ? 1 : 0, TOGGLE_SPEED);
+			float toggleX = contentX + contentW - RenderUtil.TOGGLE_WIDTH;
+			float toggleY = contentY + (HEADER_HEIGHT - RenderUtil.TOGGLE_HEIGHT) / 2f;
+			RenderUtil.toggleSwitch(graphics, toggleX, toggleY, on);
+			addHitbox(toggleX - 3, toggleY - 3, RenderUtil.TOGGLE_WIDTH + 6, RenderUtil.TOGGLE_HEIGHT + 6, module::toggle);
+		}
+		RenderUtil.text(graphics, this.font, RenderUtil.ellipsize(this.font, module.getDescription(), contentW),
+				contentX, contentY + HEADER_HEIGHT + GAP, Theme.TEXT_DIM);
 
-		int toggleX = contentX + contentW - RenderUtil.TOGGLE_WIDTH;
-		int toggleY = headerY + (HEADER_HEIGHT - RenderUtil.TOGGLE_HEIGHT) / 2;
-		RenderUtil.toggleSwitch(graphics, toggleX, toggleY, module.isEnabled());
-		addHitbox(toggleX - 2, toggleY - 2, RenderUtil.TOGGLE_WIDTH + 4, RenderUtil.TOGGLE_HEIGHT + 4, module::toggle);
-
-		graphics.text(this.font, ellipsize(module.getDescription(), contentW), contentX, headerY + HEADER_HEIGHT + 6,
-				Theme.TEXT_DIM, false);
-
-		int top = headerY + HEADER_HEIGHT + 22;
+		int top = contentY + HEADER_HEIGHT + GAP + TEXT_HEIGHT + GAP + 2;
 		int bottom = panelY + panelH - PADDING;
 		List<Setting<?>> settings = module.getSettings();
 		if (settings.isEmpty()) {
-			maxScroll = 0;
-			graphics.text(this.font, "This module has no settings.", contentX, top, Theme.TEXT_DIM, false);
+			settingsScroll.update(deltaSeconds, 0);
+			RenderUtil.text(graphics, this.font, "This module has no settings.", contentX, top + LIST_INSET, Theme.TEXT_DIM);
 			return;
 		}
 
-		int totalHeight = -ROW_GAP;
+		float listHeight = LIST_INSET * 2 - GAP;
 		for (Setting<?> setting : settings) {
-			totalHeight += rowHeight(setting) + ROW_GAP;
+			listHeight += rowHeight(setting) + GAP;
 		}
-		updateScrollLimit(totalHeight, bottom - top);
+		settingsScroll.update(deltaSeconds, listHeight - (bottom - top));
 
-		graphics.enableScissor(contentX, top, contentX + contentW, bottom);
-		int y = top - (int) scroll;
+		graphics.enableScissor(contentX - 6, top, contentX + contentW + 6, bottom);
+		float y = top + LIST_INSET - settingsScroll.get();
 		for (Setting<?> setting : settings) {
 			int h = rowHeight(setting);
-			RenderUtil.roundedRect(graphics, contentX, y, contentW, h, 5, Theme.CARD);
-			graphics.text(this.font, setting.getName(), contentX + 8, y + 8, Theme.TEXT, false);
-
-			// "instanceof X x" checks the type and gives you a variable of that type in one step.
-			if (setting instanceof BooleanSetting bool) {
-				drawBooleanRow(graphics, bool, y, h, top, bottom);
-			} else if (setting instanceof NumberSetting number) {
-				drawNumberRow(graphics, number, y, top, bottom);
-			} else if (setting instanceof ColorSetting color) {
-				drawColorRow(graphics, color, y, top, bottom);
+			if (y + h > top - 8 && y < bottom + 8) {
+				drawSettingRow(graphics, setting, y, h, top, bottom);
 			}
-			y += h + ROW_GAP;
+			y += h + GAP;
 		}
 		graphics.disableScissor();
+		drawScrollbar(graphics, settingsScroll, top, bottom - top, listHeight);
 	}
 
 	private static int rowHeight(Setting<?> setting) {
 		if (setting instanceof NumberSetting) {
-			return 34;
+			return 40;
 		}
 		if (setting instanceof ColorSetting) {
-			return 24 + CHANNEL_SHIFTS.length * 14 + 4;
+			return 30 + CHANNEL_SHIFTS.length * 16;
 		}
-		return 24;
+		return 28;
 	}
 
-	private void drawBooleanRow(GuiGraphicsExtractor graphics, BooleanSetting setting, int y, int h, int clipTop, int clipBottom) {
-		int toggleX = contentX + contentW - 8 - RenderUtil.TOGGLE_WIDTH;
-		RenderUtil.toggleSwitch(graphics, toggleX, y + (h - RenderUtil.TOGGLE_HEIGHT) / 2, setting.get());
-		addClippedHitbox(contentX, y, contentW, h, clipTop, clipBottom, setting::toggle);
+	private void drawSettingRow(GuiGraphicsExtractor graphics, Setting<?> setting, float y, int h, int clipTop, int clipBottom) {
+		boolean hovered = hovered(contentX, y, contentW, h) && insideClip(clipTop, clipBottom);
+		float hover = animate(hoverAnims, setting, hovered ? 1 : 0, HOVER_SPEED);
+		RenderUtil.roundedRect(graphics, contentX, y, contentW, h, CARD_RADIUS, Theme.lerp(Theme.CARD, Theme.CARD_HOVER, hover * 0.6f));
+		RenderUtil.text(graphics, this.font, setting.getName(), contentX + 10, y + 10, Theme.TEXT);
+
+		// "instanceof X x" checks the type and gives you a variable of that type in one step.
+		if (setting instanceof BooleanSetting bool) {
+			float on = animate(toggleAnims, bool, bool.get() ? 1 : 0, TOGGLE_SPEED);
+			RenderUtil.toggleSwitch(graphics, contentX + contentW - 10 - RenderUtil.TOGGLE_WIDTH,
+					y + (h - RenderUtil.TOGGLE_HEIGHT) / 2f, on);
+			addClippedHitbox(contentX, y, contentW, h, clipTop, clipBottom, bool::toggle);
+		} else if (setting instanceof NumberSetting number) {
+			drawNumberRow(graphics, number, y, clipTop, clipBottom);
+		} else if (setting instanceof ColorSetting color) {
+			drawColorRow(graphics, color, y, clipTop, clipBottom);
+		}
 	}
 
-	private void drawNumberRow(GuiGraphicsExtractor graphics, NumberSetting setting, int y, int clipTop, int clipBottom) {
+	private void drawNumberRow(GuiGraphicsExtractor graphics, NumberSetting setting, float y, int clipTop, int clipBottom) {
 		String value = setting.getDisplayValue();
-		graphics.text(this.font, value, contentX + contentW - 8 - this.font.width(value), y + 8, Theme.TEXT_DIM, false);
+		RenderUtil.text(graphics, this.font, value, contentX + contentW - 10 - this.font.width(value), y + 10, Theme.TEXT_DIM);
 
-		int trackX = contentX + 8;
-		int trackY = y + 22;
-		int trackW = contentW - 16;
-		RenderUtil.slider(graphics, trackX, trackY, trackW, setting.getProgress(), Theme.ACCENT);
+		float trackX = contentX + 10;
+		float trackY = y + 27;
+		float trackW = contentW - 20;
+		RenderUtil.slider(graphics, trackX, trackY, trackW, setting.getProgress(), Theme.accent());
 		addSliderHitbox(trackX, trackY, trackW, clipTop, clipBottom, setting::setFromProgress);
 	}
 
-	private void drawColorRow(GuiGraphicsExtractor graphics, ColorSetting setting, int y, int clipTop, int clipBottom) {
-		int swatchX = contentX + contentW - 8 - 20;
-		graphics.outline(swatchX - 1, y + 6, 22, 12, Theme.TOGGLE_OFF);
-		graphics.fill(swatchX, y + 7, swatchX + 20, y + 17, setting.get());
+	private void drawColorRow(GuiGraphicsExtractor graphics, ColorSetting setting, float y, int clipTop, int clipBottom) {
+		float swatchX = contentX + contentW - 10 - 22;
+		RenderUtil.roundedRect(graphics, swatchX - 1, y + 7, 24, 14, 4, Theme.withAlpha(Theme.TEXT, 0.15f));
+		RenderUtil.roundedRect(graphics, swatchX, y + 8, 22, 12, 3, Theme.CARD);
+		RenderUtil.roundedRect(graphics, swatchX, y + 8, 22, 12, 3, setting.get());
 		String hex = setting.toHex();
-		graphics.text(this.font, hex, swatchX - 6 - this.font.width(hex), y + 8, Theme.TEXT_DIM, false);
+		RenderUtil.text(graphics, this.font, hex, swatchX - 8 - this.font.width(hex), y + 10, Theme.TEXT_DIM);
 
 		int valueWidth = this.font.width("255");
+		float trackX = contentX + 24;
+		float trackW = contentW - 24 - 10 - valueWidth - 8;
 		for (int i = 0; i < CHANNEL_SHIFTS.length; i++) {
 			int shift = CHANNEL_SHIFTS[i];
-			int rowY = y + 24 + i * 14;
+			float rowY = y + 30 + i * 16;
 			int channel = setting.getChannel(shift);
-			graphics.text(this.font, CHANNEL_LABELS[i], contentX + 8, rowY, Theme.TEXT_DIM, false);
-
-			int trackX = contentX + 22;
-			int trackW = contentW - 22 - 14 - valueWidth;
+			RenderUtil.text(graphics, this.font, CHANNEL_LABELS[i], contentX + 10, rowY, Theme.TEXT_DIM);
 			RenderUtil.slider(graphics, trackX, rowY + 2, trackW, channel / 255.0, CHANNEL_COLORS[i]);
 			String channelText = String.valueOf(channel);
-			graphics.text(this.font, channelText, contentX + contentW - 8 - this.font.width(channelText), rowY,
-					Theme.TEXT_DIM, false);
-
+			RenderUtil.text(graphics, this.font, channelText, contentX + contentW - 10 - this.font.width(channelText), rowY,
+					Theme.TEXT_DIM);
 			addSliderHitbox(trackX, rowY + 2, trackW, clipTop, clipBottom,
 					progress -> setting.setChannel(shift, (int) Math.round(progress * 255)));
 		}
 	}
 
-	// ---------------------------------------------------------------- input
-
-	@Override
-	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-		// Let the search box handle clicks on itself first.
-		if (super.mouseClicked(event, doubleClick)) {
-			return true;
+	/** A thin scrollbar in the right padding that brightens while the list is moving. */
+	private void drawScrollbar(GuiGraphicsExtractor graphics, SmoothScroller scroller, float top, float height, float listHeight) {
+		float active = animate(hoverAnims, scroller, scroller.isMoving() ? 1 : 0, SCROLLBAR_SPEED);
+		if (scroller.getMax() <= 0) {
+			return;
 		}
-		setFocused(null);
-		if (event.button() != GLFW.GLFW_MOUSE_BUTTON_LEFT) {
-			return false;
-		}
-		// Check the last-drawn hitbox first, since it's on top.
-		for (int i = hitboxes.size() - 1; i >= 0; i--) {
-			Hitbox hitbox = hitboxes.get(i);
-			if (hitbox.contains(event.x(), event.y())) {
-				hitbox.onClick().accept(event.x());
-				return true;
-			}
-		}
-		return false;
+		float thumbH = Math.max(16, height * height / listHeight);
+		float thumbY = top + (height - thumbH) * (scroller.get() / scroller.getMax());
+		RenderUtil.roundedRect(graphics, contentX + contentW + 4, thumbY, 3, thumbH, 1.5f,
+				Theme.withAlpha(Theme.TEXT, 0.15f + 0.3f * active));
 	}
 
-	@Override
-	public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
-		if (activeDrag != null) {
-			activeDrag.update(event.x());
-			return true;
+	// ---------------------------------------------------------------- navigation
+
+	private void selectCategory(Category category) {
+		boolean changed = category != selectedCategory;
+		selectedCategory = category;
+		if (pageTween.isForward()) {
+			closePage();
 		}
-		return super.mouseDragged(event, dragX, dragY);
+		if (changed) {
+			gridFade.restart();
+			gridScroll.reset();
+		}
 	}
 
-	@Override
-	public boolean mouseReleased(MouseButtonEvent event) {
+	private void openPage(Module module) {
+		if (module != pageModule || !pageTween.isForward()) {
+			settingsScroll.reset();
+		}
+		pageModule = module;
+		pageTween.play(true);
 		activeDrag = null;
-		return super.mouseReleased(event);
+		search.setFocused(false);
 	}
 
-	@Override
-	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-		scroll = Math.clamp(scroll - scrollY * SCROLL_SPEED, 0, maxScroll);
-		return true;
+	private void closePage() {
+		pageTween.play(false);
+		activeDrag = null;
 	}
 
+	/** Esc, Right Shift, etc. call this. Instead of closing right away, play the open animation in reverse. */
 	@Override
-	public boolean keyPressed(KeyEvent event) {
-		if (openModule != null && event.key() == GLFW.GLFW_KEY_ESCAPE) {
-			closeSettings();
-			return true;
+	public void onClose() {
+		if (closing) {
+			return;
 		}
-		// Pressing the menu key again closes the menu, unless you're typing in the search box.
-		if (!searchBox.isFocused() && NovaClient.getOpenMenuKey().matches(event)) {
-			onClose();
-			return true;
+		closing = true;
+		activeDrag = null;
+		search.setFocused(false);
+		openTween.play(false);
+	}
+
+	private void finishClose() {
+		if (this.minecraft.gui.screen() == this) {
+			super.onClose();
 		}
-		return super.keyPressed(event);
 	}
 
 	@Override
@@ -383,72 +565,155 @@ public class NovaMenuScreen extends Screen {
 		return false;
 	}
 
+	// ---------------------------------------------------------------- input
+
+	@Override
+	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+		if (closing || event.button() != GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+			return true;
+		}
+		float x = toPanelX(event.x());
+		float y = toPanelY(event.y());
+		search.setFocused(false);
+		// Check the last-drawn hitbox first, since it's on top.
+		for (int i = hitboxes.size() - 1; i >= 0; i--) {
+			Hitbox hitbox = hitboxes.get(i);
+			if (hitbox.contains(x, y)) {
+				hitbox.onClick().accept(x);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Override
+	public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+		if (activeDrag != null) {
+			activeDrag.update(toPanelX(event.x()));
+			return true;
+		}
+		return false;
+	}
+
+	@Override
+	public boolean mouseReleased(MouseButtonEvent event) {
+		activeDrag = null;
+		return true;
+	}
+
+	@Override
+	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+		if (!closing) {
+			(pageTween.isForward() ? settingsScroll : gridScroll).impulse(-scrollY);
+		}
+		return true;
+	}
+
+	@Override
+	public boolean keyPressed(KeyEvent event) {
+		if (closing) {
+			return true;
+		}
+		if (search.keyPressed(event)) {
+			return true;
+		}
+		if (event.isEscape()) {
+			if (pageTween.isForward()) {
+				closePage();
+			} else {
+				onClose();
+			}
+			return true;
+		}
+		// Pressing the menu key again closes the menu, unless you're typing in the search box.
+		if (!search.isFocused() && NovaClient.getOpenMenuKey().matches(event)) {
+			onClose();
+			return true;
+		}
+		return super.keyPressed(event);
+	}
+
+	@Override
+	public boolean charTyped(CharacterEvent event) {
+		if (closing || pageTween.isForward()) {
+			return false;
+		}
+		// Start typing anywhere on the grid to search.
+		if (!search.isFocused() && event.isAllowedChatCharacter() && !Character.isWhitespace(event.codepoint())) {
+			search.setFocused(true);
+		}
+		return search.charTyped(event);
+	}
+
 	// ---------------------------------------------------------------- helpers
 
-	private void openSettings(Module module) {
-		openModule = module;
-		scroll = 0;
-		activeDrag = null;
-		searchBox.visible = false;
-		setFocused(null);
+	/** Undoes the open/close scale so mouse positions line up with what's drawn. */
+	private float toPanelX(double screenX) {
+		float centerX = panelX + panelW / 2f;
+		return centerX + ((float) screenX - centerX) / panelScale;
 	}
 
-	private void closeSettings() {
-		openModule = null;
-		scroll = 0;
-		activeDrag = null;
-		searchBox.visible = true;
+	private float toPanelY(double screenY) {
+		float centerY = panelY + panelH / 2f;
+		return centerY + ((float) screenY - centerY) / panelScale;
 	}
 
-	private void updateScrollLimit(int contentHeight, int viewHeight) {
-		maxScroll = Math.max(0, contentHeight - viewHeight);
-		scroll = Math.clamp(scroll, 0, maxScroll);
+	/** Advances a per-object animation toward target and returns its current value. */
+	private float animate(Map<Object, Animated> anims, Object key, float target, float speed) {
+		return anims.computeIfAbsent(key, k -> new Animated(target, speed)).update(target, deltaSeconds);
 	}
 
-	private String ellipsize(String text, int maxWidth) {
-		if (this.font.width(text) <= maxWidth) {
-			return text;
-		}
-		return this.font.plainSubstrByWidth(text, maxWidth - this.font.width("...")) + "...";
+	private boolean hovered(float x, float y, float w, float h) {
+		return interactive && isInside(panelMouseX - hitOffsetX, panelMouseY - hitOffsetY, x, y, w, h);
 	}
 
-	private static boolean isInside(double px, double py, int x, int y, int w, int h) {
+	private boolean insideClip(int clipTop, int clipBottom) {
+		float y = panelMouseY - hitOffsetY;
+		return y >= clipTop && y < clipBottom;
+	}
+
+	private static boolean isInside(float px, float py, float x, float y, float w, float h) {
 		return px >= x && px < x + w && py >= y && py < y + h;
 	}
 
-	private void addHitbox(int x, int y, int w, int h, Runnable action) {
-		hitboxes.add(new Hitbox(x, y, w, h, mouseX -> action.run()));
+	private void addHitbox(float x, float y, float w, float h, Runnable action) {
+		if (interactive) {
+			hitboxes.add(new Hitbox(x + hitOffsetX, y + hitOffsetY, w, h, mouseX -> action.run()));
+		}
 	}
 
 	/** Like addHitbox, but trimmed to the scrolling area so hidden content can't be clicked. */
-	private void addClippedHitbox(int x, int y, int w, int h, int clipTop, int clipBottom, Runnable action) {
-		int top = Math.max(y, clipTop);
-		int bottom = Math.min(y + h, clipBottom);
+	private void addClippedHitbox(float x, float y, float w, float h, int clipTop, int clipBottom, Runnable action) {
+		float top = Math.max(y, clipTop);
+		float bottom = Math.min(y + h, clipBottom);
 		if (bottom > top) {
-			hitboxes.add(new Hitbox(x, top, w, bottom - top, mouseX -> action.run()));
+			addHitbox(x, top, w, bottom - top, action);
 		}
 	}
 
 	/** A slider hitbox: clicking jumps to that spot, and dragging keeps updating until release. */
-	private void addSliderHitbox(int trackX, int trackY, int trackW, int clipTop, int clipBottom, DoubleConsumer setProgress) {
-		int top = Math.max(trackY - 4, clipTop);
-		int bottom = Math.min(trackY + 8, clipBottom);
-		if (bottom > top) {
-			hitboxes.add(new Hitbox(trackX - 3, top, trackW + 6, bottom - top, mouseX -> {
-				activeDrag = new SliderDrag(trackX, trackW, setProgress);
-				activeDrag.update(mouseX);
-			}));
+	private void addSliderHitbox(float trackX, float trackY, float trackW, int clipTop, int clipBottom,
+			DoubleConsumer setProgress) {
+		float top = Math.max(trackY - 5, clipTop);
+		float bottom = Math.min(trackY + 9, clipBottom);
+		if (!interactive || bottom <= top) {
+			return;
 		}
+		float screenTrackX = trackX + hitOffsetX;
+		hitboxes.add(new Hitbox(screenTrackX - 4, top + hitOffsetY, trackW + 8, bottom - top, mouseX -> {
+			activeDrag = new SliderDrag(screenTrackX, trackW, setProgress);
+			activeDrag.update(mouseX);
+		}));
 	}
 
 	/** A record is a small immutable data class, like a TypeScript readonly object type. */
-	private record Hitbox(int x, int y, int w, int h, DoubleConsumer onClick) {
-		boolean contains(double px, double py) {
+	private record Hitbox(float x, float y, float w, float h, DoubleConsumer onClick) {
+		boolean contains(float px, float py) {
 			return isInside(px, py, x, y, w, h);
 		}
 	}
 
-	private record SliderDrag(int trackX, int trackW, DoubleConsumer setProgress) {
+	private record SliderDrag(float trackX, float trackW, DoubleConsumer setProgress) {
 		void update(double mouseX) {
 			setProgress.accept((mouseX - trackX) / trackW);
 		}
