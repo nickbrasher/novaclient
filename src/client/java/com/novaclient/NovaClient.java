@@ -1,7 +1,9 @@
 package com.novaclient;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.novaclient.config.ConfigManager;
 import com.novaclient.gui.NovaMenuScreen;
+import com.novaclient.module.ModuleManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -24,9 +26,15 @@ public class NovaClient implements ClientModInitializer {
 			KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MOD_ID, "main"));
 
 	private static KeyMapping openMenuKey;
+	private static ModuleManager modules;
+	private static ConfigManager config;
 
 	@Override
 	public void onInitializeClient() {
+		modules = new ModuleManager();
+		config = new ConfigManager(modules);
+		config.load();
+
 		// The string is a translation key; the visible text lives in lang/en_us.json.
 		openMenuKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
 				"key.novaclient.open_menu",
@@ -42,6 +50,18 @@ public class NovaClient implements ClientModInitializer {
 			}
 		});
 
-		LOGGER.info("Nova Client initialized");
+		LOGGER.info("Nova Client initialized with {} modules", modules.getAll().size());
+	}
+
+	public static KeyMapping getOpenMenuKey() {
+		return openMenuKey;
+	}
+
+	public static ModuleManager getModules() {
+		return modules;
+	}
+
+	public static ConfigManager getConfig() {
+		return config;
 	}
 }
