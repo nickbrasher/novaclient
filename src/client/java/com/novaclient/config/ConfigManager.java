@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.novaclient.NovaClient;
+import com.novaclient.hud.HudElement;
 import com.novaclient.module.Module;
 import com.novaclient.module.ModuleManager;
 import com.novaclient.module.setting.Setting;
@@ -17,7 +18,8 @@ import java.nio.file.Path;
 
 /**
  * Saves and loads config/novaclient.json, shaped like:
- * { "modules": { "FPS Display": { "enabled": true, "settings": { "Scale": 1.0 } } } }
+ * { "modules": { "FPS Display": { "enabled": true, "settings": { ... }, "hud": { "x": 0.0, "y": 0.0, "scale": 1.0 } } } }
+ * HUD x/y are fractions of the screen (see HudElement), so they survive window resizes.
  */
 public class ConfigManager {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -54,6 +56,10 @@ public class ConfigManager {
 		if (json.get("enabled") instanceof JsonElement enabled && enabled.isJsonPrimitive()) {
 			module.setEnabled(enabled.getAsBoolean());
 		}
+		if (module instanceof HudElement element && json.get("hud") instanceof JsonObject hudJson) {
+			element.setAnchor(getFloat(hudJson, "x", element.getAnchorX()), getFloat(hudJson, "y", element.getAnchorY()));
+			element.setScale(getFloat(hudJson, "scale", element.getScale()));
+		}
 		JsonObject settingsJson = json.getAsJsonObject("settings");
 		if (settingsJson == null) {
 			return;
@@ -66,6 +72,11 @@ public class ConfigManager {
 		}
 	}
 
+	private static float getFloat(JsonObject json, String key, float fallback) {
+		JsonElement value = json.get(key);
+		return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() ? value.getAsFloat() : fallback;
+	}
+
 	public void save() {
 		JsonObject modulesJson = new JsonObject();
 		for (Module module : modules.getAll()) {
@@ -76,6 +87,13 @@ public class ConfigManager {
 			JsonObject moduleJson = new JsonObject();
 			moduleJson.addProperty("enabled", module.isEnabled());
 			moduleJson.add("settings", settingsJson);
+			if (module instanceof HudElement element) {
+				JsonObject hudJson = new JsonObject();
+				hudJson.addProperty("x", element.getAnchorX());
+				hudJson.addProperty("y", element.getAnchorY());
+				hudJson.addProperty("scale", element.getScale());
+				moduleJson.add("hud", hudJson);
+			}
 			modulesJson.add(module.getName(), moduleJson);
 		}
 		JsonObject root = new JsonObject();

@@ -4,11 +4,14 @@ import com.novaclient.NovaClient;
 import com.novaclient.gui.anim.Animated;
 import com.novaclient.gui.anim.SmoothScroller;
 import com.novaclient.gui.anim.Tween;
+import com.novaclient.hud.HudEditorScreen;
+import com.novaclient.hud.HudElement;
 import com.novaclient.module.Category;
 import com.novaclient.module.Module;
 import com.novaclient.module.ModuleManager;
 import com.novaclient.module.setting.BooleanSetting;
 import com.novaclient.module.setting.ColorSetting;
+import com.novaclient.module.setting.ModeSetting;
 import com.novaclient.module.setting.NumberSetting;
 import com.novaclient.module.setting.Setting;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -76,6 +79,8 @@ public class NovaMenuScreen extends Screen {
 	private static final Object ALL_TAB = new Object();
 	private static final Object SETTINGS_TAB = new Object();
 	private static final Object BACK_BUTTON = new Object();
+	private static final Object EDIT_HUD_BUTTON = new Object();
+	private static final Object RESET_POSITION_ROW = new Object();
 
 	// static = shared across every NovaMenuScreen, so the menu reopens where you left it.
 	private static Category selectedCategory = null; // null means "All"
@@ -87,7 +92,7 @@ public class NovaMenuScreen extends Screen {
 	private final Map<Object, Animated> toggleAnims = new HashMap<>();
 
 	private final Tween openTween = new Tween(OPEN_SECONDS, 0f, true);
-	private final Tween pageTween = new Tween(PAGE_SECONDS, 0f, false); // 0 = grid, 1 = settings page
+	private final Tween pageTween; // 0 = grid, 1 = settings page
 	private final Tween gridFade = new Tween(GRID_FADE_SECONDS, 1f, true);
 	private final Animated tabIndicator = new Animated(0, INDICATOR_SPEED);
 	private final SmoothScroller gridScroll = new SmoothScroller();
@@ -98,6 +103,8 @@ public class NovaMenuScreen extends Screen {
 	});
 
 	private Module pageModule; // the module on the settings page (kept while it slides out)
+	private final Screen returnTo; // screen to go back to when closing (e.g. the HUD editor), or null
+	private Screen afterClose; // screen to show once the close animation finishes, or null for the game
 	private SliderDrag activeDrag;
 	private boolean closing;
 	private boolean closeScheduled;
@@ -123,7 +130,19 @@ public class NovaMenuScreen extends Screen {
 	private boolean interactive;
 
 	public NovaMenuScreen() {
+		this(null, null);
+	}
+
+	/**
+	 * Opens straight onto a module's settings page. Closing (Esc or Back) returns to
+	 * returnTo instead of the game. Used by the HUD editor's right-click.
+	 */
+	public NovaMenuScreen(Module startPage, Screen returnTo) {
 		super(Component.literal("Nova Client"));
+		this.returnTo = returnTo;
+		this.afterClose = returnTo;
+		this.pageModule = startPage;
+		this.pageTween = new Tween(PAGE_SECONDS, startPage != null ? 1f : 0f, startPage != null);
 	}
 
 	@Override
@@ -302,9 +321,20 @@ public class NovaMenuScreen extends Screen {
 	// ---------------------------------------------------------------- module grid
 
 	private void drawGridPage(GuiGraphicsExtractor graphics) {
-		boolean searchHovered = hovered(contentX, contentY, contentW, HEADER_HEIGHT);
-		search.draw(graphics, this.font, contentX, contentY, contentW, HEADER_HEIGHT, searchHovered, deltaSeconds);
-		addHitbox(contentX, contentY, contentW, HEADER_HEIGHT, () -> search.setFocused(true));
+		String editLabel = "Edit HUD";
+		float editW = this.font.width(editLabel) + 22;
+		float searchW = contentW - editW - GAP;
+		boolean searchHovered = hovered(contentX, contentY, searchW, HEADER_HEIGHT);
+		search.draw(graphics, this.font, contentX, contentY, searchW, HEADER_HEIGHT, searchHovered, deltaSeconds);
+		addHitbox(contentX, contentY, searchW, HEADER_HEIGHT, () -> search.setFocused(true));
+
+		float editX = contentX + contentW - editW;
+		float editHover = animate(hoverAnims, EDIT_HUD_BUTTON, hovered(editX, contentY, editW, HEADER_HEIGHT) ? 1 : 0, HOVER_SPEED);
+		RenderUtil.roundedRect(graphics, editX, contentY, editW, HEADER_HEIGHT, CONTROL_RADIUS,
+				Theme.lerp(Theme.accent(), Theme.TEXT, editHover * 0.15f));
+		RenderUtil.text(graphics, this.font, editLabel, editX + (editW - this.font.width(editLabel)) / 2f,
+				contentY + (HEADER_HEIGHT - TEXT_HEIGHT) / 2f, Theme.TEXT);
+		addHitbox(editX, contentY, editW, HEADER_HEIGHT, () -> closeTo(new HudEditorScreen()));
 
 		int top = contentY + HEADER_HEIGHT + GAP;
 		int bottom = panelY + panelH - PADDING;
@@ -404,7 +434,8 @@ public class NovaMenuScreen extends Screen {
 		int top = contentY + HEADER_HEIGHT + GAP + TEXT_HEIGHT + GAP + 2;
 		int bottom = panelY + panelH - PADDING;
 		List<Setting<?>> settings = module.getSettings();
-		if (settings.isEmpty()) {
+		boolean hasPositionRow = module instanceof HudElement;
+		if (settings.isEmpty() && !hasPositionRow) {
 			settingsScroll.update(deltaSeconds, 0);
 			RenderUtil.text(graphics, this.font, "This module has no settings.", contentX, top + LIST_INSET, Theme.TEXT_DIM);
 			return;
@@ -413,6 +444,9 @@ public class NovaMenuScreen extends Screen {
 		float listHeight = LIST_INSET * 2 - GAP;
 		for (Setting<?> setting : settings) {
 			listHeight += rowHeight(setting) + GAP;
+		}
+		if (hasPositionRow) {
+			listHeight += POSITION_ROW_HEIGHT + GAP;
 		}
 		settingsScroll.update(deltaSeconds, listHeight - (bottom - top));
 
@@ -425,8 +459,36 @@ public class NovaMenuScreen extends Screen {
 			}
 			y += h + GAP;
 		}
+		if (module instanceof HudElement element && y + POSITION_ROW_HEIGHT > top - 8 && y < bottom + 8) {
+			drawPositionRow(graphics, element, y, top, bottom);
+		}
 		graphics.disableScissor();
 		drawScrollbar(graphics, settingsScroll, top, bottom - top, listHeight);
+	}
+
+	private static final int POSITION_ROW_HEIGHT = 28;
+
+	/** For HUD elements: shows the current scale and a button to put the element back where it started. */
+	private void drawPositionRow(GuiGraphicsExtractor graphics, HudElement element, float y, int clipTop, int clipBottom) {
+		RenderUtil.roundedRect(graphics, contentX, y, contentW, POSITION_ROW_HEIGHT, CARD_RADIUS, Theme.CARD);
+		RenderUtil.text(graphics, this.font, "Position", contentX + 10, y + 10, Theme.TEXT);
+		String scale = String.format("Scale %.2fx", element.getScale());
+		RenderUtil.text(graphics, this.font, scale, contentX + 10 + this.font.width("Position") + 8, y + 10, Theme.TEXT_DIM);
+
+		String label = "Reset Position";
+		float buttonW = this.font.width(label) + 16;
+		float buttonH = 18;
+		float buttonX = contentX + contentW - 5 - buttonW;
+		float buttonY = y + (POSITION_ROW_HEIGHT - buttonH) / 2f;
+		boolean over = hovered(buttonX, buttonY, buttonW, buttonH) && insideClip(clipTop, clipBottom);
+		float hover = animate(hoverAnims, RESET_POSITION_ROW, over ? 1 : 0, HOVER_SPEED);
+		RenderUtil.roundedRect(graphics, buttonX, buttonY, buttonW, buttonH, CONTROL_RADIUS,
+				Theme.lerp(Theme.CARD_HOVER, Theme.withAlpha(Theme.accent(), 0.9f), hover));
+		RenderUtil.text(graphics, this.font, label, buttonX + 8, buttonY + 5, Theme.lerp(Theme.TEXT_DIM, Theme.TEXT, hover));
+		addClippedHitbox(buttonX, buttonY, buttonW, buttonH, clipTop, clipBottom, () -> {
+			element.resetPosition();
+			NovaClient.getConfig().save();
+		});
 	}
 
 	private static int rowHeight(Setting<?> setting) {
@@ -455,6 +517,45 @@ public class NovaMenuScreen extends Screen {
 			drawNumberRow(graphics, number, y, clipTop, clipBottom);
 		} else if (setting instanceof ColorSetting color) {
 			drawColorRow(graphics, color, y, clipTop, clipBottom);
+		} else if (setting instanceof ModeSetting mode) {
+			drawModeRow(graphics, mode, y, h, clipTop, clipBottom);
+		}
+	}
+
+	/** A segmented control: one pill per option, with a highlight that slides to the selected one. */
+	private void drawModeRow(GuiGraphicsExtractor graphics, ModeSetting setting, float y, int h, int clipTop, int clipBottom) {
+		List<String> modes = setting.getModes();
+		float segmentH = 16;
+		float[] widths = new float[modes.size()];
+		float totalW = 4;
+		for (int i = 0; i < modes.size(); i++) {
+			widths[i] = this.font.width(modes.get(i)) + 16;
+			totalW += widths[i];
+		}
+		float trackX = contentX + contentW - 6 - totalW;
+		float trackY = y + (h - segmentH - 4) / 2f;
+		RenderUtil.roundedRect(graphics, trackX, trackY, totalW, segmentH + 4, CONTROL_RADIUS, Theme.TOGGLE_OFF);
+
+		float selectedX = trackX + 2;
+		float selectedW = widths[0];
+		float x = trackX + 2;
+		for (int i = 0; i < modes.size(); i++) {
+			if (setting.is(modes.get(i))) {
+				selectedX = x;
+				selectedW = widths[i];
+			}
+			x += widths[i];
+		}
+		float pillX = animate(toggleAnims, setting, selectedX - trackX, INDICATOR_SPEED);
+		RenderUtil.roundedRect(graphics, trackX + pillX, trackY + 2, selectedW, segmentH, CONTROL_RADIUS - 1, Theme.accent());
+
+		x = trackX + 2;
+		for (int i = 0; i < modes.size(); i++) {
+			String mode = modes.get(i);
+			int color = setting.is(mode) ? Theme.TEXT : Theme.TEXT_DIM;
+			RenderUtil.text(graphics, this.font, mode, x + (widths[i] - this.font.width(mode)) / 2f, trackY + 6, color);
+			addClippedHitbox(x, trackY, widths[i], segmentH + 4, clipTop, clipBottom, () -> setting.set(mode));
+			x += widths[i];
 		}
 	}
 
@@ -531,8 +632,19 @@ public class NovaMenuScreen extends Screen {
 	}
 
 	private void closePage() {
+		if (returnTo != null) {
+			// Opened from the HUD editor: "back" means back to the editor.
+			onClose();
+			return;
+		}
 		pageTween.play(false);
 		activeDrag = null;
+	}
+
+	/** Plays the close animation, then shows next instead of returning to the game. */
+	private void closeTo(Screen next) {
+		afterClose = next;
+		onClose();
 	}
 
 	/** Esc, Right Shift, etc. call this. Instead of closing right away, play the open animation in reverse. */
@@ -548,7 +660,12 @@ public class NovaMenuScreen extends Screen {
 	}
 
 	private void finishClose() {
-		if (this.minecraft.gui.screen() == this) {
+		if (this.minecraft.gui.screen() != this) {
+			return;
+		}
+		if (afterClose != null) {
+			this.minecraft.setScreenAndShow(afterClose);
+		} else {
 			super.onClose();
 		}
 	}

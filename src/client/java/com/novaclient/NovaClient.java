@@ -3,6 +3,8 @@ package com.novaclient;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.novaclient.config.ConfigManager;
 import com.novaclient.gui.NovaMenuScreen;
+import com.novaclient.hud.HudEditorScreen;
+import com.novaclient.hud.HudRenderer;
 import com.novaclient.module.ModuleManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -26,6 +28,7 @@ public class NovaClient implements ClientModInitializer {
 			KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MOD_ID, "main"));
 
 	private static KeyMapping openMenuKey;
+	private static KeyMapping openHudEditorKey;
 	private static ModuleManager modules;
 	private static ConfigManager config;
 
@@ -43,18 +46,35 @@ public class NovaClient implements ClientModInitializer {
 				CATEGORY
 		));
 
+		// Right Option on a Mac keyboard. Change it in Options > Controls > Key Binds.
+		openHudEditorKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+				"key.novaclient.open_hud_editor",
+				InputConstants.Type.KEYSYM,
+				GLFW.GLFW_KEY_RIGHT_ALT,
+				CATEGORY
+		));
+
 		// Runs at the end of every client tick (20x per second).
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			while (openMenuKey.consumeClick()) {
 				client.setScreenAndShow(new NovaMenuScreen());
 			}
+			while (openHudEditorKey.consumeClick()) {
+				client.setScreenAndShow(new HudEditorScreen());
+			}
 		});
+
+		HudRenderer.register();
 
 		LOGGER.info("Nova Client initialized with {} modules", modules.getAll().size());
 	}
 
 	public static KeyMapping getOpenMenuKey() {
 		return openMenuKey;
+	}
+
+	public static KeyMapping getOpenHudEditorKey() {
+		return openHudEditorKey;
 	}
 
 	public static ModuleManager getModules() {

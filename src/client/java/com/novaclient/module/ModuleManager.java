@@ -1,5 +1,7 @@
 package com.novaclient.module;
 
+import com.novaclient.hud.HudElement;
+import com.novaclient.module.impl.ActiveModsModule;
 import com.novaclient.module.impl.FpsDisplayModule;
 import com.novaclient.module.impl.MenuSettingsModule;
 import com.novaclient.module.impl.ToggleSprintModule;
@@ -17,6 +19,7 @@ public class ModuleManager {
 
 	public ModuleManager() {
 		register(menuSettings);
+		register(new ActiveModsModule());
 		register(new FpsDisplayModule());
 		register(new ToggleSprintModule());
 	}
@@ -32,6 +35,17 @@ public class ModuleManager {
 	/** Every module, including hidden ones. Used for saving. */
 	public List<Module> getAll() {
 		return Collections.unmodifiableList(modules);
+	}
+
+	/** Every HUD element, enabled or not. */
+	public List<HudElement> getHudElements() {
+		List<HudElement> elements = new ArrayList<>();
+		for (Module module : modules) {
+			if (module instanceof HudElement element) {
+				elements.add(element);
+			}
+		}
+		return elements;
 	}
 
 	/**

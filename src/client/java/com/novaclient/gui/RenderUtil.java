@@ -148,8 +148,12 @@ public final class RenderUtil {
 		}
 	}
 
-	/** Text without a drop shadow, snapped to whole screen pixels so it stays crisp. */
+	/** Text (no drop shadow unless asked), snapped to whole screen pixels so it stays crisp. */
 	public static void text(GuiGraphicsExtractor graphics, Font font, String text, float x, float y, int color) {
+		text(graphics, font, text, x, y, color, false);
+	}
+
+	public static void text(GuiGraphicsExtractor graphics, Font font, String text, float x, float y, int color, boolean shadow) {
 		int c = fade(color);
 		if ((c >>> 24) < 4) {
 			return;
@@ -158,7 +162,7 @@ public final class RenderUtil {
 		Matrix3x2fStack pose = graphics.pose();
 		pose.pushMatrix();
 		pose.translate(Math.round(x * s) / s, Math.round(y * s) / s);
-		graphics.text(font, text, 0, 0, c, false);
+		graphics.text(font, text, 0, 0, c, shadow);
 		pose.popMatrix();
 	}
 
