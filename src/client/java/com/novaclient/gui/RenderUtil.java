@@ -55,6 +55,11 @@ public final class RenderUtil {
 		if ((c >>> 24) == 0) {
 			return;
 		}
+		// Fast path: square corners on whole GUI pixels need no sub-pixel work.
+		if (radius <= 0 && x == (int) x && y == (int) y && w == (int) w && h == (int) h) {
+			graphics.fill((int) x, (int) y, (int) (x + w), (int) (y + h), c);
+			return;
+		}
 		float s = guiScale();
 		int x0 = Math.round(x * s);
 		int y0 = Math.round(y * s);

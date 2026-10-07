@@ -8,6 +8,7 @@ import com.novaclient.hud.HudRenderer;
 import com.novaclient.module.ModuleManager;
 import com.novaclient.module.impl.ToggleSprintModule;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.KeyMapping;
@@ -72,6 +73,8 @@ public class NovaClient implements ClientModInitializer {
 		});
 
 		HudRenderer.register();
+		// Flush any pending save before the game exits.
+		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> config.saveNow());
 
 		LOGGER.info("Nova Client initialized with {} modules", modules.getAll().size());
 	}

@@ -17,6 +17,14 @@ public class ModuleManager {
 	private final List<Module> modules = new ArrayList<>();
 	private final MenuSettingsModule menuSettings = new MenuSettingsModule();
 
+	private final List<HudElement> hudElements = new ArrayList<>();
+	private final List<HudElement> hudElementsView = Collections.unmodifiableList(hudElements);
+
+	// The last search, cached so the menu doesn't rebuild the list every frame.
+	private String lastQuery;
+	private Category lastCategory;
+	private List<Module> lastResults = List.of();
+
 	public ModuleManager() {
 		register(menuSettings);
 		register(new ActiveModsModule());
@@ -26,6 +34,9 @@ public class ModuleManager {
 
 	private void register(Module module) {
 		modules.add(module);
+		if (module instanceof HudElement element) {
+			hudElements.add(element);
+		}
 	}
 
 	public MenuSettingsModule getMenuSettings() {
@@ -37,15 +48,9 @@ public class ModuleManager {
 		return Collections.unmodifiableList(modules);
 	}
 
-	/** Every HUD element, enabled or not. */
+	/** Every HUD element, enabled or not. Built once at startup. */
 	public List<HudElement> getHudElements() {
-		List<HudElement> elements = new ArrayList<>();
-		for (Module module : modules) {
-			if (module instanceof HudElement element) {
-				elements.add(element);
-			}
-		}
-		return elements;
+		return hudElementsView;
 	}
 
 	/**
@@ -69,6 +74,16 @@ public class ModuleManager {
 	 * A null category means all categories; an empty query matches everything.
 	 */
 	public List<Module> search(String query, Category category) {
+		if (query.equals(lastQuery) && category == lastCategory) {
+			return lastResults;
+		}
+		lastQuery = query;
+		lastCategory = category;
+		lastResults = computeSearch(query, category);
+		return lastResults;
+	}
+
+	private List<Module> computeSearch(String query, Category category) {
 		String needle = query.trim().toLowerCase(Locale.ROOT);
 		return modules.stream()
 				.filter(module -> !module.isHidden())

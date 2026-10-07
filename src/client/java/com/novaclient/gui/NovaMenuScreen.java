@@ -14,6 +14,7 @@ import com.novaclient.module.setting.ColorSetting;
 import com.novaclient.module.setting.ModeSetting;
 import com.novaclient.module.setting.NumberSetting;
 import com.novaclient.module.setting.Setting;
+import com.novaclient.util.RenderStats;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.CharacterEvent;
@@ -161,6 +162,7 @@ public class NovaMenuScreen extends Screen {
 	/** Background runs first each frame, so this is where the clock and timed animations advance. */
 	@Override
 	public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+		long timer = RenderStats.start();
 		long now = Util.getNanos();
 		deltaSeconds = lastFrameNanos == 0 ? 0 : Math.min((now - lastFrameNanos) / 1_000_000_000f, 0.1f);
 		lastFrameNanos = now;
@@ -178,13 +180,21 @@ public class NovaMenuScreen extends Screen {
 		if (this.minecraft.level == null) {
 			extractPanorama(graphics, partialTick);
 		}
-		// Uses the player's Menu Background Blur setting (Options > Accessibility).
-		extractBlurredBackground(graphics);
-		graphics.fill(0, 0, this.width, this.height, Theme.withAlpha(Theme.TINT, openTween.eased()));
+		// Blur is the most expensive effect, so it can be turned off in Menu Settings.
+		// Its strength follows the player's Menu Background Blur option (Options > Accessibility).
+		boolean blur = modules.getMenuSettings().isBackgroundBlurEnabled();
+		if (blur) {
+			extractBlurredBackground(graphics);
+		}
+		// Without blur, a slightly darker tint keeps the panel readable.
+		int tint = blur ? Theme.TINT : 0xB0000000;
+		graphics.fill(0, 0, this.width, this.height, Theme.withAlpha(tint, openTween.eased()));
+		RenderStats.stop(timer);
 	}
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+		long timer = RenderStats.start();
 		hitboxes.clear();
 		float open = openTween.eased();
 		panelScale = 0.9f + 0.1f * open;
@@ -212,6 +222,7 @@ public class NovaMenuScreen extends Screen {
 
 		RenderUtil.setAlpha(1f);
 		pose.popMatrix();
+		RenderStats.stop(timer);
 	}
 
 	private void drawPanel(GuiGraphicsExtractor graphics) {
@@ -487,7 +498,7 @@ public class NovaMenuScreen extends Screen {
 		RenderUtil.text(graphics, this.font, label, buttonX + 8, buttonY + 5, Theme.lerp(Theme.TEXT_DIM, Theme.TEXT, hover));
 		addClippedHitbox(buttonX, buttonY, buttonW, buttonH, clipTop, clipBottom, () -> {
 			element.resetPosition();
-			NovaClient.getConfig().save();
+			NovaClient.getConfig().saveSoon();
 		});
 	}
 
@@ -673,7 +684,7 @@ public class NovaMenuScreen extends Screen {
 	@Override
 	public void removed() {
 		// Called whenever this screen closes, however it was closed.
-		NovaClient.getConfig().save();
+		NovaClient.getConfig().saveSoon();
 	}
 
 	@Override

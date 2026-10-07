@@ -58,12 +58,14 @@ public abstract class HudElement extends Module {
 		float deltaSeconds = lastFrameNanos == 0 ? 0 : Math.min((now - lastFrameNanos) / 1_000_000_000f, 0.1f);
 		lastFrameNanos = now;
 
-		Bounds bounds = getBounds(screenWidth, screenHeight);
+		// Same math as getBounds(), inlined so drawing doesn't create an object every frame.
+		float left = x * Math.max(0, screenWidth - getWidth() * scale);
+		float top = y * Math.max(0, screenHeight - getHeight() * scale);
 		// Snap to whole screen pixels so text stays crisp.
 		float guiScale = Minecraft.getInstance().getWindow().getGuiScale();
 		Matrix3x2fStack pose = graphics.pose();
 		pose.pushMatrix();
-		pose.translate(Math.round(bounds.x() * guiScale) / guiScale, Math.round(bounds.y() * guiScale) / guiScale);
+		pose.translate(Math.round(left * guiScale) / guiScale, Math.round(top * guiScale) / guiScale);
 		pose.scale(scale, scale);
 		render(graphics, deltaSeconds, editing);
 		pose.popMatrix();

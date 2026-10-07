@@ -18,6 +18,10 @@ public abstract class Module {
 	private final List<Setting<?>> settings = new ArrayList<>();
 	private boolean enabled;
 
+	// Bumped whenever any module is switched on or off, so caches (like Active Mods)
+	// can tell when to rebuild without checking every module every frame.
+	private static int enabledStateVersion;
+
 	protected Module(String name, String description, Category category) {
 		this.name = name;
 		this.description = description;
@@ -42,6 +46,7 @@ public abstract class Module {
 			return;
 		}
 		this.enabled = enabled;
+		enabledStateVersion++;
 		if (enabled) {
 			onEnable();
 		} else {
@@ -65,6 +70,10 @@ public abstract class Module {
 	/** Whether the menu shows an on/off switch for this module. */
 	public boolean isToggleable() {
 		return true;
+	}
+
+	public static int getEnabledStateVersion() {
+		return enabledStateVersion;
 	}
 
 	public String getName() {

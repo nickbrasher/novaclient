@@ -6,6 +6,7 @@ import com.novaclient.gui.RenderUtil;
 import com.novaclient.gui.Theme;
 import com.novaclient.gui.anim.Animated;
 import com.novaclient.gui.anim.Tween;
+import com.novaclient.util.RenderStats;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
@@ -37,6 +38,7 @@ public class HudEditorScreen extends Screen {
 	private final Map<Object, Animated> hoverAnims = new HashMap<>();
 	private final Animated toolbarVisibility = new Animated(1, 10f);
 	private final List<Button> buttons = new ArrayList<>();
+	private final List<HudElement> visible = new ArrayList<>(); // reused, not rebuilt as a new list each call
 
 	private HudElement dragging;
 	private boolean resizing;
@@ -61,10 +63,11 @@ public class HudEditorScreen extends Screen {
 	}
 
 	private List<HudElement> visibleElements() {
-		List<HudElement> visible = new ArrayList<>();
-		for (HudElement element : NovaClient.getModules().getHudElements()) {
-			if (element.isEnabled()) {
-				visible.add(element);
+		visible.clear();
+		List<HudElement> all = NovaClient.getModules().getHudElements();
+		for (int i = 0; i < all.size(); i++) {
+			if (all.get(i).isEnabled()) {
+				visible.add(all.get(i));
 			}
 		}
 		return visible;
@@ -96,6 +99,7 @@ public class HudEditorScreen extends Screen {
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+		long timer = RenderStats.start();
 		lastMouseX = mouseX;
 		lastMouseY = mouseY;
 		float open = openTween.eased();
@@ -113,6 +117,7 @@ public class HudEditorScreen extends Screen {
 		}
 		drawToolbar(graphics, mouseX, mouseY);
 		RenderUtil.setAlpha(1f);
+		RenderStats.stop(timer);
 	}
 
 	private void drawOutline(GuiGraphicsExtractor graphics, HudElement element, boolean hovered, int mouseX, int mouseY) {
@@ -358,7 +363,7 @@ public class HudEditorScreen extends Screen {
 			dragging = null;
 			guideX = null;
 			guideY = null;
-			NovaClient.getConfig().save();
+			NovaClient.getConfig().saveSoon();
 		}
 		return true;
 	}
@@ -372,7 +377,7 @@ public class HudEditorScreen extends Screen {
 			HudElement element = elementAt(lastMouseX, lastMouseY);
 			if (element != null) {
 				element.resetPosition();
-				NovaClient.getConfig().save();
+				NovaClient.getConfig().saveSoon();
 				return true;
 			}
 		}
@@ -401,7 +406,7 @@ public class HudEditorScreen extends Screen {
 		for (HudElement element : NovaClient.getModules().getHudElements()) {
 			element.resetPosition();
 		}
-		NovaClient.getConfig().save();
+		NovaClient.getConfig().saveSoon();
 	}
 
 	private float animate(Object key, float target) {
@@ -424,7 +429,7 @@ public class HudEditorScreen extends Screen {
 
 	@Override
 	public void removed() {
-		NovaClient.getConfig().save();
+		NovaClient.getConfig().saveSoon();
 	}
 
 	@Override

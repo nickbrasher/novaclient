@@ -12,9 +12,16 @@ import com.novaclient.module.ModuleManager;
 import com.novaclient.module.setting.Setting;
 import net.fabricmc.loader.api.FabricLoader;
 
+import net.minecraft.client.Minecraft;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Saves and loads config/novaclient.json, shaped like:
@@ -23,6 +30,17 @@ import java.nio.file.Path;
  */
 public class ConfigManager {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+	private static final long SAVE_DELAY_MILLIS = 500;
+
+	// One background thread for disk writes, so saving never stalls a frame.
+	// Daemon = it won't keep the game process alive on exit.
+	private final ScheduledExecutorService writer = Executors.newSingleThreadScheduledExecutor(runnable -> {
+		Thread thread = new Thread(runnable, "Nova Client config writer");
+		thread.setDaemon(true);
+		return thread;
+	});
+	private ScheduledFuture<?> pendingSave;
+	private final Object writeLock = new Object();
 
 	private final Path file = FabricLoader.getInstance().getConfigDir().resolve(NovaClient.MOD_ID + ".json");
 	private final ModuleManager modules;
@@ -77,7 +95,34 @@ public class ConfigManager {
 		return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber() ? value.getAsFloat() : fallback;
 	}
 
-	public void save() {
+	/**
+	 * Saves half a second after the last call. Many quick changes (like dragging a
+	 * slider) collapse into a single write. Safe to call as often as you like.
+	 */
+	public synchronized void saveSoon() {
+		if (pendingSave != null) {
+			pendingSave.cancel(false);
+		}
+		// When the delay is up, read module state on the game thread (where it's changed),
+		// then hand the finished text to the writer thread.
+		pendingSave = writer.schedule(
+				() -> Minecraft.getInstance().execute(() -> {
+					String json = toJson();
+					writer.execute(() -> write(json));
+				}),
+				SAVE_DELAY_MILLIS, TimeUnit.MILLISECONDS);
+	}
+
+	/** Saves right now on the calling thread. Used when the game is closing. */
+	public synchronized void saveNow() {
+		if (pendingSave != null) {
+			pendingSave.cancel(false);
+			pendingSave = null;
+		}
+		write(toJson());
+	}
+
+	private String toJson() {
 		JsonObject modulesJson = new JsonObject();
 		for (Module module : modules.getAll()) {
 			JsonObject settingsJson = new JsonObject();
@@ -98,10 +143,23 @@ public class ConfigManager {
 		}
 		JsonObject root = new JsonObject();
 		root.add("modules", modulesJson);
+		return GSON.toJson(root);
+	}
 
+	/** Writes to a temp file first, then swaps it in, so a crash mid-write can't corrupt the config. */
+	private void write(String json) {
+		// Its own lock, so a slow disk never blocks the game thread calling saveSoon().
+		synchronized (writeLock) {
+			writeFile(json);
+		}
+	}
+
+	private void writeFile(String json) {
 		try {
 			Files.createDirectories(file.getParent());
-			Files.writeString(file, GSON.toJson(root));
+			Path temp = file.resolveSibling(file.getFileName() + ".tmp");
+			Files.writeString(temp, json);
+			Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
 		} catch (IOException e) {
 			NovaClient.LOGGER.error("Failed to save {}", file, e);
 		}
