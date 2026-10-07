@@ -6,6 +6,7 @@ import com.novaclient.gui.NovaMenuScreen;
 import com.novaclient.hud.HudEditorScreen;
 import com.novaclient.hud.HudRenderer;
 import com.novaclient.module.ModuleManager;
+import com.novaclient.module.impl.ToggleSprintModule;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -55,6 +56,12 @@ public class NovaClient implements ClientModInitializer {
 		));
 
 		// Runs at the end of every client tick (20x per second).
+		// Toggle Sprint runs at the start of each tick, before the player moves.
+		ToggleSprintModule toggleSprint = modules.getByName("Toggle Sprint")
+				.map(ToggleSprintModule.class::cast)
+				.orElseThrow();
+		ClientTickEvents.START_CLIENT_TICK.register(toggleSprint::tick);
+
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			while (openMenuKey.consumeClick()) {
 				client.setScreenAndShow(new NovaMenuScreen());

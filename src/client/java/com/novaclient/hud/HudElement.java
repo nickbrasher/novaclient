@@ -28,7 +28,12 @@ public abstract class HudElement extends Module {
 	private long lastFrameNanos;
 
 	protected HudElement(String name, String description, float defaultX, float defaultY) {
-		super(name, description, Category.HUD);
+		this(name, description, Category.HUD, defaultX, defaultY);
+	}
+
+	/** For modules that draw on the HUD but belong in another category (e.g. Toggle Sprint in Utility). */
+	protected HudElement(String name, String description, Category category, float defaultX, float defaultY) {
+		super(name, description, category);
 		this.defaultX = defaultX;
 		this.defaultY = defaultY;
 		this.x = defaultX;
