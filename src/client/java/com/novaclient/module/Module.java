@@ -1,6 +1,7 @@
 package com.novaclient.module;
 
 import com.novaclient.module.setting.Setting;
+import net.minecraft.client.Minecraft;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -60,6 +61,13 @@ public abstract class Module {
 
 	/** Called when the module turns off. */
 	protected void onDisable() {
+	}
+
+	/**
+	 * Called at the start of every client tick (20x per second), before the player moves,
+	 * whether or not the module is enabled. Most modules don't need it.
+	 */
+	public void tick(Minecraft client) {
 	}
 
 	/** Hidden modules are left out of the grid and search (e.g. Menu Settings). */

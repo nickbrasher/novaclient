@@ -35,7 +35,7 @@ public class ToggleSprintModule extends HudElement {
 		super("Toggle Sprint", "Press sprint once to keep sprinting.", Category.UTILITY, 0f, 0.1f);
 	}
 
-	/** Called every client tick from NovaClient, before the player moves. */
+	@Override
 	public void tick(Minecraft client) {
 		KeyMapping sprintKey = client.options.keySprint;
 		LocalPlayer player = client.player;

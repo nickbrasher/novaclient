@@ -5,6 +5,7 @@ import com.novaclient.module.impl.ActiveModsModule;
 import com.novaclient.module.impl.FpsDisplayModule;
 import com.novaclient.module.impl.MenuSettingsModule;
 import com.novaclient.module.impl.ToggleSprintModule;
+import net.minecraft.client.Minecraft;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,6 +38,23 @@ public class ModuleManager {
 		if (module instanceof HudElement element) {
 			hudElements.add(element);
 		}
+	}
+
+	/** Runs every module's per-tick logic. Called from NovaClient at the start of each client tick. */
+	public void tick(Minecraft client) {
+		for (int i = 0; i < modules.size(); i++) {
+			modules.get(i).tick(client);
+		}
+	}
+
+	/** Looks up a module by its class, e.g. get(ZoomModule.class). Throws if it was never registered. */
+	public <T extends Module> T get(Class<T> type) {
+		for (int i = 0; i < modules.size(); i++) {
+			if (type.isInstance(modules.get(i))) {
+				return type.cast(modules.get(i));
+			}
+		}
+		throw new IllegalArgumentException("Module not registered: " + type.getSimpleName());
 	}
 
 	public MenuSettingsModule getMenuSettings() {
