@@ -7,6 +7,8 @@ classes/
 
 # eclipse
 
+.metadata/
+
 *.launch
 
 # idea
@@ -38,4 +40,8 @@ hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
-NovaClient-backup.zip
+
+# local tooling and backups
+
+.claude/
+*.zip
