@@ -7,7 +7,7 @@
 	"authors": [
 		"Nick Brasher"
 	],
-	"license": "CC0-1.0",
+	"license": "MIT",
 	"icon": "assets/novaclient/icon.png",
 	"environment": "client",
 	"mixins": [
