@@ -40,6 +40,14 @@ public abstract class HudElement extends Module {
 		this.y = defaultY;
 	}
 
+	/**
+	 * Whether the element currently has anything to draw. When false it's skipped on the
+	 * HUD and hidden in the HUD editor, so there's no empty box to grab.
+	 */
+	public boolean isVisibleOnHud() {
+		return true;
+	}
+
 	/** Width before scaling, in GUI pixels. */
 	public abstract int getWidth();
 

@@ -94,6 +94,12 @@ public class ToggleSprintModule extends HudElement {
 		return toggled ? "[Sprinting (Toggled)]" : "[Sprinting (Vanilla)]";
 	}
 
+	/** With the status text off there's nothing to show, so hide it from the HUD editor too. */
+	@Override
+	public boolean isVisibleOnHud() {
+		return showStatus.get();
+	}
+
 	@Override
 	public int getWidth() {
 		// Sized for the longest message so the box doesn't change size as the status changes.
@@ -107,9 +113,6 @@ public class ToggleSprintModule extends HudElement {
 
 	@Override
 	protected void render(GuiGraphicsExtractor graphics, float deltaSeconds, boolean editing) {
-		if (!showStatus.get()) {
-			return;
-		}
 		String text = statusText();
 		if (text == null && editing) {
 			text = SAMPLE_TEXT; // show something to grab in the HUD editor

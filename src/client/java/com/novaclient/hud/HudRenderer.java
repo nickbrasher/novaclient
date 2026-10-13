@@ -34,7 +34,7 @@ public final class HudRenderer {
 			List<HudElement> elements = NovaClient.getModules().getHudElements();
 			for (int i = 0; i < elements.size(); i++) {
 				HudElement element = elements.get(i);
-				if (element.isEnabled()) {
+				if (element.isEnabled() && element.isVisibleOnHud()) {
 					element.draw(graphics, width, height, false);
 				}
 			}

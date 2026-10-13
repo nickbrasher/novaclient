@@ -66,7 +66,7 @@ public class HudEditorScreen extends Screen {
 		visible.clear();
 		List<HudElement> all = NovaClient.getModules().getHudElements();
 		for (int i = 0; i < all.size(); i++) {
-			if (all.get(i).isEnabled()) {
+			if (all.get(i).isEnabled() && all.get(i).isVisibleOnHud()) {
 				visible.add(all.get(i));
 			}
 		}
