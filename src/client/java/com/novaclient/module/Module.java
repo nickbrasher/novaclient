@@ -1,5 +1,6 @@
 package com.novaclient.module;
 
+import com.novaclient.module.setting.KeybindSetting;
 import com.novaclient.module.setting.Setting;
 import net.minecraft.client.Minecraft;
 
@@ -17,6 +18,9 @@ public abstract class Module {
 	private final String description;
 	private final Category category;
 	private final List<Setting<?>> settings = new ArrayList<>();
+	// Every toggleable module gets a keybind; it's appended after the module's own settings.
+	private final KeybindSetting keybind = new KeybindSetting("Keybind", KeybindSetting.NONE);
+	private List<Setting<?>> allSettings; // settings + keybind, built on first use
 	private boolean enabled;
 
 	// Bumped whenever any module is switched on or off, so caches (like Active Mods)
@@ -35,6 +39,7 @@ public abstract class Module {
 	 */
 	protected <S extends Setting<?>> S addSetting(S setting) {
 		settings.add(setting);
+		allSettings = null;
 		return setting;
 	}
 
@@ -100,7 +105,19 @@ public abstract class Module {
 		return enabled;
 	}
 
+	/** The module's settings, followed by its keybind if it can be toggled. */
 	public List<Setting<?>> getSettings() {
-		return Collections.unmodifiableList(settings);
+		if (allSettings == null) {
+			List<Setting<?>> all = new ArrayList<>(settings);
+			if (isToggleable()) {
+				all.add(keybind);
+			}
+			allSettings = Collections.unmodifiableList(all);
+		}
+		return allSettings;
+	}
+
+	public KeybindSetting getKeybind() {
+		return keybind;
 	}
 }

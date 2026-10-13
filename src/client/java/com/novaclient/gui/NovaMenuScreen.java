@@ -11,6 +11,7 @@ import com.novaclient.module.Module;
 import com.novaclient.module.ModuleManager;
 import com.novaclient.module.setting.BooleanSetting;
 import com.novaclient.module.setting.ColorSetting;
+import com.novaclient.module.setting.KeybindSetting;
 import com.novaclient.module.setting.ModeSetting;
 import com.novaclient.module.setting.NumberSetting;
 import com.novaclient.module.setting.Setting;
@@ -107,6 +108,7 @@ public class NovaMenuScreen extends Screen {
 	private final Screen returnTo; // screen to go back to when closing (e.g. the HUD editor), or null
 	private Screen afterClose; // screen to show once the close animation finishes, or null for the game
 	private SliderDrag activeDrag;
+	private KeybindSetting listeningKeybind; // the keybind waiting for a key press, or null
 	private boolean closing;
 	private boolean closeScheduled;
 	private boolean indicatorPlaced;
@@ -530,7 +532,31 @@ public class NovaMenuScreen extends Screen {
 			drawColorRow(graphics, color, y, clipTop, clipBottom);
 		} else if (setting instanceof ModeSetting mode) {
 			drawModeRow(graphics, mode, y, h, clipTop, clipBottom);
+		} else if (setting instanceof KeybindSetting keybind) {
+			drawKeybindRow(graphics, keybind, y, h, clipTop, clipBottom);
 		}
+	}
+
+	/**
+	 * A button showing the bound key. Click it, then press a key to bind it
+	 * (Esc or Backspace clears the binding). See keyPressed().
+	 */
+	private void drawKeybindRow(GuiGraphicsExtractor graphics, KeybindSetting setting, float y, int h, int clipTop, int clipBottom) {
+		boolean listening = listeningKeybind == setting;
+		String label = listening ? "Press a key..." : setting.getKeyName();
+		float buttonW = Math.max(44, this.font.width(label) + 16);
+		float buttonH = 18;
+		float buttonX = contentX + contentW - 6 - buttonW;
+		float buttonY = y + (h - buttonH) / 2f;
+		boolean over = hovered(buttonX, buttonY, buttonW, buttonH) && insideClip(clipTop, clipBottom);
+		float hover = animate(toggleAnims, setting, over ? 1 : 0, HOVER_SPEED);
+
+		int fill = listening ? Theme.withAlpha(Theme.accent(), 0.9f) : Theme.lerp(Theme.TOGGLE_OFF, Theme.CARD_HOVER, hover);
+		RenderUtil.roundedRect(graphics, buttonX, buttonY, buttonW, buttonH, CONTROL_RADIUS, fill);
+		int textColor = listening || setting.isBound() ? Theme.TEXT : Theme.TEXT_DIM;
+		RenderUtil.text(graphics, this.font, label, buttonX + (buttonW - this.font.width(label)) / 2f, buttonY + 5, textColor);
+		addClippedHitbox(buttonX, buttonY, buttonW, buttonH, clipTop, clipBottom,
+				() -> listeningKeybind = listening ? null : setting);
 	}
 
 	/** A segmented control: one pill per option, with a highlight that slides to the selected one. */
@@ -639,6 +665,7 @@ public class NovaMenuScreen extends Screen {
 		pageModule = module;
 		pageTween.play(true);
 		activeDrag = null;
+		listeningKeybind = null;
 		search.setFocused(false);
 	}
 
@@ -650,6 +677,7 @@ public class NovaMenuScreen extends Screen {
 		}
 		pageTween.play(false);
 		activeDrag = null;
+		listeningKeybind = null;
 	}
 
 	/** Plays the close animation, then shows next instead of returning to the game. */
@@ -666,6 +694,7 @@ public class NovaMenuScreen extends Screen {
 		}
 		closing = true;
 		activeDrag = null;
+		listeningKeybind = null;
 		search.setFocused(false);
 		openTween.play(false);
 	}
@@ -703,6 +732,8 @@ public class NovaMenuScreen extends Screen {
 		float x = toPanelX(event.x());
 		float y = toPanelY(event.y());
 		search.setFocused(false);
+		// Clicking anywhere cancels a pending keybind; clicking the button itself turns it back on below.
+		listeningKeybind = null;
 		// Check the last-drawn hitbox first, since it's on top.
 		for (int i = hitboxes.size() - 1; i >= 0; i--) {
 			Hitbox hitbox = hitboxes.get(i);
@@ -740,6 +771,12 @@ public class NovaMenuScreen extends Screen {
 	@Override
 	public boolean keyPressed(KeyEvent event) {
 		if (closing) {
+			return true;
+		}
+		if (listeningKeybind != null) {
+			boolean clear = event.isEscape() || event.key() == GLFW.GLFW_KEY_BACKSPACE;
+			listeningKeybind.set(clear ? KeybindSetting.NONE : event.key());
+			listeningKeybind = null;
 			return true;
 		}
 		if (search.keyPressed(event)) {

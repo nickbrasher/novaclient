@@ -11,6 +11,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
@@ -73,6 +74,20 @@ public class NovaClient implements ClientModInitializer {
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> config.saveNow());
 
 		LOGGER.info("Nova Client initialized with {} modules", modules.getAll().size());
+	}
+
+	/**
+	 * Called by KeyboardHandlerMixin for every key press. Module keybinds only fire
+	 * in-game, never while a menu, chat, or inventory is open (so typing can't toggle things).
+	 */
+	public static void onKeyPressed(int key) {
+		Minecraft client = Minecraft.getInstance();
+		if (modules == null || client.gui.screen() != null || client.player == null) {
+			return;
+		}
+		if (modules.onKeyPressed(key)) {
+			config.saveSoon();
+		}
 	}
 
 	public static KeyMapping getOpenMenuKey() {

@@ -47,6 +47,19 @@ public class ModuleManager {
 		}
 	}
 
+	/** Toggles every module bound to this key. Returns true if any module changed. */
+	public boolean onKeyPressed(int key) {
+		boolean changed = false;
+		for (int i = 0; i < modules.size(); i++) {
+			Module module = modules.get(i);
+			if (module.isToggleable() && module.getKeybind().matches(key)) {
+				module.toggle();
+				changed = true;
+			}
+		}
+		return changed;
+	}
+
 	/** Looks up a module by its class, e.g. get(ZoomModule.class). Throws if it was never registered. */
 	public <T extends Module> T get(Class<T> type) {
 		for (int i = 0; i < modules.size(); i++) {
