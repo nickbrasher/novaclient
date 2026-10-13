@@ -2,6 +2,7 @@ package com.novaclient.module;
 
 import com.novaclient.hud.HudElement;
 import com.novaclient.module.impl.ActiveModsModule;
+import com.novaclient.module.impl.CoordinatesModule;
 import com.novaclient.module.impl.CpsDisplayModule;
 import com.novaclient.module.impl.FpsDisplayModule;
 import com.novaclient.module.impl.MenuSettingsModule;
@@ -35,6 +36,7 @@ public class ModuleManager {
 		register(new ToggleSprintModule());
 		register(new ZoomModule());
 		register(new CpsDisplayModule());
+		register(new CoordinatesModule());
 	}
 
 	private void register(Module module) {
