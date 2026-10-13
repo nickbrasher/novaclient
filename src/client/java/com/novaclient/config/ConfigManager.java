@@ -42,6 +42,11 @@ public class ConfigManager {
 	private ScheduledFuture<?> pendingSave;
 	private final Object writeLock = new Object();
 
+	// Every snapshot gets a number when it's taken. A write is skipped if a newer snapshot
+	// was already written, so a slow background save can't overwrite the final save on exit.
+	private long snapshotCounter;
+	private long lastWrittenSnapshot = -1;
+
 	private final Path file = FabricLoader.getInstance().getConfigDir().resolve(NovaClient.MOD_ID + ".json");
 	private final ModuleManager modules;
 
@@ -108,7 +113,8 @@ public class ConfigManager {
 		pendingSave = writer.schedule(
 				() -> Minecraft.getInstance().execute(() -> {
 					String json = toJson();
-					writer.execute(() -> write(json));
+					long snapshot = nextSnapshot();
+					writer.execute(() -> write(json, snapshot));
 				}),
 				SAVE_DELAY_MILLIS, TimeUnit.MILLISECONDS);
 	}
@@ -119,7 +125,11 @@ public class ConfigManager {
 			pendingSave.cancel(false);
 			pendingSave = null;
 		}
-		write(toJson());
+		write(toJson(), nextSnapshot());
+	}
+
+	private synchronized long nextSnapshot() {
+		return snapshotCounter++;
 	}
 
 	private String toJson() {
@@ -147,9 +157,13 @@ public class ConfigManager {
 	}
 
 	/** Writes to a temp file first, then swaps it in, so a crash mid-write can't corrupt the config. */
-	private void write(String json) {
+	private void write(String json, long snapshot) {
 		// Its own lock, so a slow disk never blocks the game thread calling saveSoon().
 		synchronized (writeLock) {
+			if (snapshot < lastWrittenSnapshot) {
+				return;
+			}
+			lastWrittenSnapshot = snapshot;
 			writeFile(json);
 		}
 	}
