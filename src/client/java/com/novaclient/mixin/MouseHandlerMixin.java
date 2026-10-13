@@ -1,8 +1,12 @@
 package com.novaclient.mixin;
 
 import com.novaclient.NovaClient;
+import com.novaclient.module.impl.CpsDisplayModule;
 import com.novaclient.module.impl.ZoomModule;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
+import net.minecraft.client.input.MouseButtonInfo;
+import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -29,5 +33,14 @@ public abstract class MouseHandlerMixin {
 			accumulatedDX *= multiplier;
 			accumulatedDY *= multiplier;
 		}
+	}
+
+	/** Counts in-game clicks for the CPS display. GLFW calls onButton for every mouse button press and release. */
+	@Inject(method = "onButton", at = @At("HEAD"))
+	private void novaclient$countClick(long window, MouseButtonInfo info, int action, CallbackInfo ci) {
+		if (NovaClient.getModules() == null || action != GLFW.GLFW_PRESS || Minecraft.getInstance().gui.screen() != null) {
+			return;
+		}
+		NovaClient.getModules().get(CpsDisplayModule.class).recordClick(info.button());
 	}
 }
