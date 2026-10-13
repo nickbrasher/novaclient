@@ -5,6 +5,7 @@ import com.novaclient.module.impl.ActiveModsModule;
 import com.novaclient.module.impl.FpsDisplayModule;
 import com.novaclient.module.impl.MenuSettingsModule;
 import com.novaclient.module.impl.ToggleSprintModule;
+import com.novaclient.module.impl.ZoomModule;
 import net.minecraft.client.Minecraft;
 
 import java.util.ArrayList;
@@ -31,6 +32,7 @@ public class ModuleManager {
 		register(new ActiveModsModule());
 		register(new FpsDisplayModule());
 		register(new ToggleSprintModule());
+		register(new ZoomModule());
 	}
 
 	private void register(Module module) {

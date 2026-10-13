@@ -4,7 +4,9 @@
 	"package": "com.novaclient.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
-		"KeyboardHandlerMixin"
+		"CameraMixin",
+		"KeyboardHandlerMixin",
+		"MouseHandlerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
